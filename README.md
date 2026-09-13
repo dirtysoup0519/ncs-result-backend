@@ -41,6 +41,11 @@ python scripts/admin_cli.py init-control-schema --sqlite .local/control.sqlite
 
 该命令只创建控制表，支持重复执行；真实 MySQL 迁移和生产凭据接入仍需单独配置。
 
+控制面当前已提供批次生命周期和发布用例的本地 DB-API 适配：批次按
+`CREATED -> LOADING -> VALIDATING -> READY -> PUBLISHED` 受状态机约束，重复提交同一
+上游批次幂等，发布会在事务中切换活动发布记录并写入审计日志。实现位于
+`src/ncs_backend/admin/repositories.py` 和 `src/ncs_backend/admin/services.py`；导入器、质量规则持久化和回滚接口将在后续迭代接入。
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`
