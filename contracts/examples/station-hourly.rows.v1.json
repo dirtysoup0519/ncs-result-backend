@@ -1,0 +1,12 @@
+[
+  {
+    "data_date": "2019-01-01",
+    "stat_hour": 0,
+    "charging_energy_kwh": "12.50"
+  },
+  {
+    "data_date": "2019-01-01",
+    "stat_hour": 1,
+    "charging_energy_kwh": "0.00"
+  }
+]

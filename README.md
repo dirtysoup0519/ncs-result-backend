@@ -1,6 +1,6 @@
 # NCS 结果库与后端
 
-当前分支正在实现 `Iteration 1`：工程骨架、公共合同模型、Flask 应用工厂、机器学习 CLI 和基础测试。
+当前分支已完成工程骨架、Manifest/Schema/质量规则/状态机基础，以及按 V1 冻结合同搭建的查询 API 路由和空数据适配器。真实 MySQL 视图适配仍待上游字段确认。
 
 ## 本地验证
 
@@ -22,9 +22,23 @@ python scripts/run_admin.py
 
 数据库未配置时，`/health/live` 应返回存活，`/health/ready` 会明确返回未就绪；这不是数据库连接验证。
 
+当前合同样例位于 `contracts/examples/`。这些样例用于验证内部协议，不代表上游真实字段已经确认。
+
+校验一份 Schema、Manifest 和 JSON 样例：
+
+```powershell
+python scripts/admin_cli.py validate-delivery `
+  --schema contracts/examples/station-hourly.schema.v1.json `
+  --manifest contracts/examples/station-hourly.manifest.v1.json `
+  --data contracts/examples/station-hourly.rows.v1.json
+```
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`
 - `docs/实现路线与对接清单.md`
 - `docs/api-contract.md`
+- `docs/大屏接口冻结合同_v1.md`
+- `docs/前端接口协议.md`
+- `docs/前端启动元数据接口简表.md`
 - `docs/data-contract.md`

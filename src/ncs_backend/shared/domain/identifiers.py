@@ -56,3 +56,14 @@ class ModelVersion:
 
     def __str__(self) -> str:
         return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCode:
+    value: str
+
+    def __post_init__(self) -> None:
+        _validate(self.value, "model code")
+
+    def __str__(self) -> str:
+        return self.value

@@ -1,0 +1,10 @@
+{
+  "datasetCode": "dws.order_hourly",
+  "schemaVersion": "v1",
+  "dataDate": "2019-01-01",
+  "grain": ["data_date", "stat_hour"],
+  "rowCount": 2,
+  "sha256": "e4ec9a83f4844870f28987c5d8413ce8ffb2fe33d9af7b82c0acaa60a2a2bdf1",
+  "sourceUri": "example://station-hourly.rows.v1.json",
+  "generatedAt": "2026-09-13T00:00:00Z"
+}

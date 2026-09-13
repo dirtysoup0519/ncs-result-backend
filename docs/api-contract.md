@@ -1,8 +1,10 @@
 # NCS 抽象接口与通信协议契约
 
-> 状态：抽象接口草案  
-> 契约版本：`1.0-draft`  
-> 依赖数据合同：`docs/data-contract.md`  
+> 状态：公共抽象合同；大屏字段受 `docs/大屏接口冻结合同_v1.md` 约束
+> 契约版本：`1.0-rc1`
+> 依赖数据合同：`docs/data-contract.md`
+> 前端首屏冻结合同：`docs/大屏接口冻结合同_v1.md`
+> 前端首屏字段示例：`docs/前端接口协议.md`
 > 本文只定义边界、请求、响应和行为，不给出具体代码实现
 
 ## 1. 接口域
@@ -28,6 +30,8 @@
 | --- | --- |
 | `P0` | 基础链路必须具备 |
 | `P1` | 建议在首轮联调后补齐 |
+| `P2` | 依赖机器学习或额外数据合同，前两波稳定后接入 |
+| `P3` | 可由前端本地规则先满足，后端仅预留扩展能力 |
 | `R` | 预留能力，数据或需求满足后启用 |
 
 预留接口未启用时返回稳定的 `CAPABILITY_DISABLED`，不能返回假数据。
@@ -237,6 +241,8 @@
 
 `dashboard/batch` 不是任意查询接口，只允许白名单组件和每个组件的合法参数。单组件失败时 HTTP 可保持 `200`，同时 `meta.partial=true` 并返回该组件错误。
 
+当前前端原型确认 `dashboard/overview` 首批返回总订单数、总充电量、总充电费用、总用户数和活跃站点数。V1 暂不返回“较上期/环比”；未来启用时再增加对比值、比例和 `comparisonBasis`。截图和 Mock 中的数字不能作为默认响应。
+
 ### 6.3 公共维度与筛选
 
 | 等级 | 方法与路径 | 抽象输入 | 抽象输出 |
@@ -252,11 +258,14 @@
 | --- | --- | --- | --- |
 | P0 | `GET /api/v1/charging/hourly` | 日期、区域/站点 | 24 小时充电量、会话或负荷序列 |
 | P0 | `GET /api/v1/charging/trend` | 日期范围、粒度、指标 | 充电趋势序列 |
-| P0 | `GET /api/v1/revenue/trend` | 日期范围、区域/站点 | 收入、成本、利润趋势 |
-| P0 | `GET /api/v1/revenue/summary` | 日期范围、区域/站点 | 今日、本月、累计或指定范围摘要 |
+| P1 | `GET /api/v1/charging/station-hour-heatmap` | 日期、指标、站点范围/上限 | 站点 × 0～23 小时热力值和观测标记 |
+| P1 | `GET /api/v1/charging/duration-distribution` | 日期范围、区域/站点 | `0-1h`、`1-2h`、`2-3h`、`3h+` 订单分布 |
+| P1 | `GET /api/v1/charging/weekday-weekend` | 日期范围、区域 | 工作日/周末的原始指标及归一化雷达值 |
+| P0 | `GET /api/v1/charging/process-summary` | 日期范围、`stationId?` | 平均 SOC、平均最高温度、平均电压、电流及聚合范围 |
+| P0 | `GET /api/v1/revenue/trend` | 日期范围、区域/站点 | 充电费用和充电量趋势；V1 不含服务费/利润 |
+| P0 | `GET /api/v1/revenue/summary` | 日期范围、区域/站点 | 充电费用、充电量和订单摘要 |
 | P0 | `GET /api/v1/chargers/status-distribution` | 日期/批次、区域/站点 | 空闲、占用、故障等数量和比例 |
 | P1 | `GET /api/v1/chargers/type-efficiency` | 日期范围、区域 | 不同桩类型使用率和充电量 |
-| P1 | `GET /api/v1/charging/weekday-weekend` | 日期范围、区域 | 工作日/周末对比 |
 | P1 | `GET /api/v1/charging/peak-periods` | 日期范围、区域/站点 | 高峰时段及负荷摘要 |
 
 ### 6.5 站点接口
@@ -265,9 +274,9 @@
 | --- | --- | --- | --- |
 | P0 | `GET /api/v1/stations` | 区域、状态、关键字、cursor | 站点摘要列表 |
 | P0 | `GET /api/v1/stations/ranking` | 日期范围、`metric`、`limit` | 站点 Top N 和排名 |
-| P0 | `GET /api/v1/stations/map` | 区域、状态、地图边界、`limit` | 坐标、坐标系、状态和摘要 |
-| P0 | `GET /api/v1/stations/{stationId}` | 日期/批次 | 单站当前摘要 |
-| P0 | `GET /api/v1/stations/{stationId}/trend` | 日期范围、粒度、指标 | 单站趋势 |
+| P1 | `GET /api/v1/stations/map` | 区域、状态、地图边界、`limit` | 坐标、坐标系、状态和摘要 |
+| P1 | `GET /api/v1/stations/{stationId}` | 日期/批次 | 单站当前摘要 |
+| P1 | `GET /api/v1/stations/{stationId}/trend` | 日期范围、粒度、指标 | 单站趋势 |
 | P1 | `GET /api/v1/stations/{stationId}/chargers` | 状态、类型、cursor | 电桩聚合/摘要；不提供控制动作 |
 | P1 | `GET /api/v1/stations/region-comparison` | 日期范围、指标 | 区域对比和成本收益 |
 
@@ -279,7 +288,7 @@
 | --- | --- | --- | --- |
 | R | `GET /api/v1/audience/segments` | 日期、区域、分层方式 | 用户分层数量与行为指标 |
 | R | `GET /api/v1/audience/profile` | 日期、区域 | 聚合画像雷达指标，不返回个人信息 |
-| R | `GET /api/v1/audience/platform-distribution` | 日期、区域 | 平台偏好分布 |
+| P0 | `GET /api/v1/audience/platform-distribution` | 日期、区域 | Android、iOS、Web 的订单数、订单占比和可选费用 |
 | R | `GET /api/v1/batteries/health-distribution` | 日期、区域 | 健康等级数量、比例、异常率 |
 | R | `GET /api/v1/sentiment/summary` | 日期范围、区域 | 聚合舆情统计；要求独立可靠来源 |
 
@@ -287,9 +296,9 @@
 
 | 等级 | 方法与路径 | 抽象输入 | 抽象输出 |
 | --- | --- | --- | --- |
-| P0 | `GET /api/v1/predictions/load` | `stationId?`、`regionId?`、`horizon`（1h/6h/24h） | 实际与预测序列、上下界、模型版本 |
-| P0 | `GET /api/v1/predictions/model-info` | `modelCode?` | 当前活动模型公开摘要和评估指标 |
-| P0 | `GET /api/v1/predictions/status` | `modelCode?` | 最新预测批次、覆盖率、新鲜度和可用时域 |
+| P2 | `GET /api/v1/predictions/load` | `stationId?`、`regionId?`、`horizon`（1h/6h/24h） | 历史订单数、实际/预测充电量、预测上下界、分界时间和模型版本 |
+| P2 | `GET /api/v1/predictions/model-info` | `modelCode?` | 当前活动模型公开摘要和评估指标 |
+| P2 | `GET /api/v1/predictions/status` | `modelCode?` | 最新预测批次、覆盖率、新鲜度和可用时域 |
 | P1 | `GET /api/v1/predictions/accuracy` | 日期范围、站点/区域、指标 | 预测与实际回流后的误差 |
 | P1 | `GET /api/v1/predictions/peak-periods` | 站点/区域、预测日期 | 预测高峰时段 |
 | R | `GET /api/v1/predictions/free-capacity` | 站点/区域、时域 | 预测空闲桩或可用容量 |
@@ -301,7 +310,15 @@
 - 有旧预测但过期：可返回旧预测，必须标记 `staleness=STALE` 和真实生成时间。
 - 请求不支持的时域：`400 PREDICTION_UNSUPPORTED_HORIZON`。
 
-### 6.8 健康与观测
+### 6.8 运营建议
+
+| 等级 | 方法与路径 | 抽象输入 | 抽象输出 |
+| --- | --- | --- | --- |
+| R，来源待确认 | `GET /api/v1/operations/recommendations` | 日期/批次、`stationId?` | 已登记规则产生的建议、证据指标、严重度和生成时间 |
+
+V1 允许前端根据已确认的高峰时段、Top1 站点等字段套用固定模板。查询后端不得临时拼接建议；只有需要统一管理且存在已确认规则来源时才启用该接口。
+
+### 6.9 健康与观测
 
 | 等级 | 方法与路径 | 输出 |
 | --- | --- | --- |

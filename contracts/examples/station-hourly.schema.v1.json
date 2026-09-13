@@ -1,0 +1,27 @@
+{
+  "datasetCode": "dws.order_hourly",
+  "version": "v1",
+  "grain": ["data_date", "stat_hour"],
+  "uniqueKey": ["data_date", "stat_hour"],
+  "fields": [
+    {
+      "name": "data_date",
+      "type": "date",
+      "nullable": false,
+      "description": "Business statistics date"
+    },
+    {
+      "name": "stat_hour",
+      "type": "integer",
+      "nullable": false,
+      "description": "Hour of day in Asia/Shanghai"
+    },
+    {
+      "name": "charging_energy_kwh",
+      "type": "decimal",
+      "nullable": false,
+      "description": "Charging energy in the hour",
+      "unit": "kWh"
+    }
+  ]
+}

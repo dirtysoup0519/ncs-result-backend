@@ -17,12 +17,15 @@ class AppError(Exception):
         return self.message
 
     def to_dict(self, trace_id: str | None = None) -> dict[str, Any]:
-        error: dict[str, Any] = {"code": self.code, "message": self.message}
+        body: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+            "data": None,
+            "errors": [],
+            "meta": {"requestId": trace_id},
+        }
         if self.details:
-            error["details"] = self.details
-        body: dict[str, Any] = {"code": self.code, "message": self.message, "error": error}
-        if trace_id:
-            body["traceId"] = trace_id
+            body["errors"] = [self.details]
         return body
 
 

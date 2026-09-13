@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flask import Flask, jsonify
+from flask import Flask, g, jsonify
 
 from ncs_backend.shared.config import Settings
 from ncs_backend.shared.errors import AppError
@@ -16,17 +16,17 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.get("/health/live")
     def live():
-        return jsonify({"code": 0, "message": "ok", "data": {"status": "alive"}})
+        return jsonify({"code": "OK", "message": "ok", "data": {"status": "alive"}})
 
     @app.get("/health/ready")
     def ready():
         current: Settings = app.config["NCS_SETTINGS"]
         if not current.database_configured:
             return jsonify({"code": "DEPENDENCY_NOT_READY", "message": "database is not configured"}), 503
-        return jsonify({"code": 0, "message": "ok", "data": {"status": "ready"}})
+        return jsonify({"code": "OK", "message": "ok", "data": {"status": "ready"}})
 
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):
-        return jsonify(error.to_dict()), error.status_code
+        return jsonify(error.to_dict(g.get("trace_id"))), error.status_code
 
     return app

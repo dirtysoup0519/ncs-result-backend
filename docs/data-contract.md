@@ -122,11 +122,17 @@ API 契约：前端可见的稳定 camelCase 字段
 | `dataset_code` | 粒度 | 必需维度 | 指标类别 | 优先级 |
 | --- | --- | --- | --- | --- |
 | `dashboard_snapshot` | 数据日期/发布批次 | 日期、区域可选 | 会话、充电量、费用、站点、异常率 | P0 |
-| `revenue_daily` | 日期/区域/站点 | 日期、区域、站点 | 收入、成本、利润、订单 | P0 |
+| `revenue_daily` | 日期/区域/站点 | 日期、区域、站点 | 充电费用、充电量、订单；V1 不含服务费/利润 | P0 |
 | `charge_hourly` | 日期/小时/区域/站点 | 日期、小时、区域、站点 | 充电量、会话、负荷 | P0 |
 | `station_daily` | 日期/站点 | 日期、站点 | 利用率、充电量、费用、在线率 | P0 |
 | `station_snapshot` | 发布批次/站点 | 站点、经纬度、坐标系 | 总桩、空闲、占用、故障 | P0 |
 | `charger_status` | 发布批次/状态/类型 | 状态、类型、区域/站点 | 数量、占比 | P0 |
+| `platform_distribution` | 日期/平台 | 日期、平台 | 订单数、订单占比、可选平台总费用 | P0 |
+| `charging_duration_distribution` | 日期/时长桶 | 日期、时长桶 | 订单数、占比 | P1 |
+| `weekday_weekend_profile` | 日期范围/日期类型/指标 | 工作日或周末、指标 | 原始值、单位、归一化值 | P1 |
+| `station_hour_heatmap` | 日期/站点/小时 | 日期、站点、0～23 小时 | 充电量或已登记指标、观测标记 | P1 |
+| `charging_process_summary` | 日期/站点可选 | 日期、站点 | 记录数、会话数、平均 SOC/电流/电压、平均最高温度 | P0，站点粒度待确认 |
+| `operation_recommendation` | 生成批次/建议 | 规则、证据指标、适用范围 | 文案、严重度、生成时间 | R，V1 默认前端模板 |
 | `user_segment` | 日期/用户分层 | 分层代码 | 人数、次数、时长、消费 | P1，数据可用时启用 |
 | `battery_health` | 日期/健康等级/区域 | 健康等级、区域 | 数量、占比、异常率 | P1，数据可用时启用 |
 
@@ -134,8 +140,8 @@ API 契约：前端可见的稳定 camelCase 字段
 
 | `dataset_code` | 粒度 | 用途 | 优先级 |
 | --- | --- | --- | --- |
-| `station_load_features` | 站点/特征时间 | 负荷预测训练与推理输入 | P0 |
-| `load_prediction` | 预测运行/站点/目标时间/时域 | 1h、6h、24h 负荷预测 | P0 |
+| `station_load_features` | 站点/特征时间 | 负荷预测训练与推理输入 | P2（前端波次） |
+| `load_prediction` | 预测运行/站点/目标时间/时域 | 1h、6h、24h 负荷预测 | P2（前端波次） |
 | `load_prediction_actual` | 站点/目标时间 | 预测完成后的实际值回流 | P1 |
 | `model_metric_history` | 模型/评估窗口/指标 | 模型效果和漂移展示 | P1 |
 
