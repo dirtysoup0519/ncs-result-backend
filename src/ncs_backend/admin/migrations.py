@@ -16,6 +16,8 @@ CONTROL_TABLES = (
     "ml_prediction_run",
 )
 
+STAGING_TABLES = ("stg_import_row",)
+
 CONTROL_SCHEMA_SQL = (
     """
     CREATE TABLE IF NOT EXISTS ctl_dataset (
@@ -46,6 +48,7 @@ CONTROL_SCHEMA_SQL = (
         schema_version VARCHAR(32) NOT NULL,
         source_batch_id VARCHAR(128) NOT NULL,
         source_uri TEXT NOT NULL,
+        source_sha256 VARCHAR(64) NOT NULL,
         data_date DATE NOT NULL,
         row_count BIGINT NOT NULL DEFAULT 0,
         status VARCHAR(32) NOT NULL,
@@ -128,6 +131,19 @@ CONTROL_SCHEMA_SQL = (
     """,
 )
 
+STAGING_SCHEMA_SQL = (
+    """
+    CREATE TABLE IF NOT EXISTS stg_import_row (
+        batch_id VARCHAR(128) NOT NULL,
+        row_number BIGINT NOT NULL,
+        payload_json TEXT NOT NULL,
+        row_sha256 VARCHAR(64) NOT NULL,
+        loaded_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (batch_id, row_number)
+    )
+    """,
+)
+
 
 def initialize_control_schema(connection: Any, statements: Iterable[str] = CONTROL_SCHEMA_SQL) -> tuple[str, ...]:
     """Create control tables atomically and return their logical names."""
@@ -143,3 +159,19 @@ def initialize_control_schema(connection: Any, statements: Iterable[str] = CONTR
     finally:
         cursor.close()
     return CONTROL_TABLES
+
+
+def initialize_staging_schema(connection: Any, statements: Iterable[str] = STAGING_SCHEMA_SQL) -> tuple[str, ...]:
+    """Create local staging tables atomically and return their logical names."""
+
+    cursor = connection.cursor()
+    try:
+        for statement in statements:
+            cursor.execute(statement)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        cursor.close()
+    return STAGING_TABLES

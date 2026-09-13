@@ -60,3 +60,16 @@ def test_control_schema_initialization_is_idempotent(tmp_path, capsys):
         "ml_prediction_run",
     } <= tables
     assert '"initialized": true' in capsys.readouterr().out
+
+
+def test_staging_schema_initialization_is_idempotent(tmp_path, capsys):
+    database = tmp_path / "staging.sqlite"
+
+    assert main(["init-staging-schema", "--sqlite", str(database)]) == 0
+    assert main(["init-staging-schema", "--sqlite", str(database)]) == 0
+
+    connection = sqlite3.connect(database)
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    connection.close()
+    assert "stg_import_row" in tables
+    assert '"initialized": true' in capsys.readouterr().out

@@ -5,65 +5,35 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from ncs_backend.shared.contracts.manifest import DatasetManifest
-from ncs_backend.shared.contracts.quality import NonNullRule, QualityValidator, RowCountRule, SchemaRule, UniqueKeyRule
-from ncs_backend.shared.contracts.schema import DatasetSchema
-from ncs_backend.admin.migrations import CONTROL_TABLES, initialize_control_schema
+from ncs_backend.admin.migrations import initialize_control_schema, initialize_staging_schema
+from ncs_backend.admin.importers import DeliveryValidator
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NCS data administration utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    validate = subparsers.add_parser("validate-delivery", help="validate schema, manifest and JSON rows")
+    validate = subparsers.add_parser("validate-delivery", help="validate schema, manifest and JSON/CSV/TSV rows")
     validate.add_argument("--schema", type=Path, required=True)
     validate.add_argument("--manifest", type=Path, required=True)
     validate.add_argument("--data", type=Path, required=True)
     initialize = subparsers.add_parser("init-control-schema", help="initialize the local control-plane schema")
     initialize.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
+    staging = subparsers.add_parser("init-staging-schema", help="initialize the local staging schema")
+    staging.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
     return parser
 
 
 def validate_delivery(schema_path: Path, manifest_path: Path, data_path: Path) -> dict[str, Any]:
-    schema = DatasetSchema.from_dict(json.loads(schema_path.read_text("utf-8")))
-    manifest = DatasetManifest.from_dict(json.loads(manifest_path.read_text("utf-8")))
-    rows = json.loads(data_path.read_text("utf-8"))
-    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-        raise ValueError("data must be a JSON array of objects")
-
-    contract_issues: list[dict[str, str]] = []
-    if manifest.dataset_code != schema.dataset_code:
-        contract_issues.append({"code": "DATASET_CODE_MISMATCH", "message": "manifest and schema differ"})
-    if manifest.schema_version != schema.version:
-        contract_issues.append({"code": "SCHEMA_VERSION_MISMATCH", "message": "manifest and schema differ"})
-    if manifest.grain != schema.grain:
-        contract_issues.append({"code": "GRAIN_MISMATCH", "message": "manifest and schema differ"})
-    if sha256(data_path.read_bytes()).hexdigest() != manifest.sha256:
-        contract_issues.append({"code": "CHECKSUM_MISMATCH", "message": "data checksum does not match manifest"})
-
-    report = QualityValidator(
-        [SchemaRule(reject_unknown_fields=True), NonNullRule(), UniqueKeyRule(), RowCountRule(manifest.row_count)]
-    ).validate(rows, schema)
-    quality_issues = [
-        {
-            "code": issue.rule_code,
-            "message": issue.message,
-            "rowIndex": issue.row_index,
-            "field": issue.field,
-            "severity": issue.severity.value,
-        }
-        for issue in report.issues
-    ]
-    issues = contract_issues + quality_issues
+    result = DeliveryValidator().validate_files(schema_path, manifest_path, data_path)
     return {
-        "passed": not issues,
-        "datasetCode": str(schema.dataset_code),
-        "schemaVersion": str(schema.version),
-        "rowCount": report.row_count,
-        "issues": issues,
+        "passed": result.passed,
+        "datasetCode": result.dataset_code,
+        "schemaVersion": result.schema_version,
+        "rowCount": result.row_count,
+        "issues": list(result.issues),
     }
 
 
@@ -74,6 +44,16 @@ def main(argv: list[str] | None = None) -> int:
         connection = sqlite3.connect(args.sqlite)
         try:
             tables = initialize_control_schema(connection)
+        finally:
+            connection.close()
+        print(json.dumps({"initialized": True, "database": str(args.sqlite), "tables": list(tables)}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "init-staging-schema":
+        args.sqlite.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(args.sqlite)
+        try:
+            tables = initialize_staging_schema(connection)
         finally:
             connection.close()
         print(json.dumps({"initialized": True, "database": str(args.sqlite), "tables": list(tables)}, ensure_ascii=False, indent=2))
