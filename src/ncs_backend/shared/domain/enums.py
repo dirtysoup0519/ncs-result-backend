@@ -17,21 +17,3 @@ class CapabilityStatus(StrEnum):
     ENABLED = "ENABLED"
     DISABLED = "DISABLED"
     UNKNOWN = "UNKNOWN"
-
-
-class ModelStatus(StrEnum):
-    REGISTERED = "REGISTERED"
-    VALIDATED = "VALIDATED"
-    ACTIVE = "ACTIVE"
-    RETIRED = "RETIRED"
-    REJECTED = "REJECTED"
-
-
-class PredictionRunStatus(StrEnum):
-    CREATED = "CREATED"
-    RUNNING = "RUNNING"
-    VALIDATING = "VALIDATING"
-    READY = "READY"
-    PUBLISHED = "PUBLISHED"
-    REJECTED = "REJECTED"
-    FAILED = "FAILED"

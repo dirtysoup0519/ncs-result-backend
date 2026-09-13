@@ -1,4 +1,4 @@
-"""Validated identifiers shared across data, API and ML contracts."""
+"""Validated identifiers shared across data and API contracts."""
 
 from __future__ import annotations
 
@@ -42,28 +42,6 @@ class BatchId:
 
     def __post_init__(self) -> None:
         _validate(self.value, "batch id")
-
-    def __str__(self) -> str:
-        return self.value
-
-
-@dataclass(frozen=True, slots=True)
-class ModelVersion:
-    value: str
-
-    def __post_init__(self) -> None:
-        _validate(self.value, "model version")
-
-    def __str__(self) -> str:
-        return self.value
-
-
-@dataclass(frozen=True, slots=True)
-class ModelCode:
-    value: str
-
-    def __post_init__(self) -> None:
-        _validate(self.value, "model code")
 
     def __str__(self) -> str:
         return self.value

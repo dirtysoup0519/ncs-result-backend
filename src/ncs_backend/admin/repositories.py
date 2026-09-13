@@ -85,6 +85,8 @@ class QualityResultRecord:
 
 
 class ControlRepository(Protocol):
+    def list_datasets(self) -> tuple[DatasetRecord, ...]: ...
+
     def get_dataset(self, dataset_code: DatasetCode) -> DatasetRecord | None: ...
 
     def insert_dataset(self, dataset: DatasetRecord) -> DatasetRecord: ...
@@ -103,9 +105,17 @@ class ControlRepository(Protocol):
         schema_version: SchemaVersion,
     ) -> SchemaVersionRecord | None: ...
 
+    def list_schema_versions(self, dataset_code: DatasetCode) -> tuple[SchemaVersionRecord, ...]: ...
+
     def insert_schema_version(self, schema: SchemaVersionRecord) -> SchemaVersionRecord: ...
 
     def find_batch_by_source(self, dataset_code: DatasetCode, source_batch_id: str) -> ImportBatchRecord | None: ...
+
+    def list_batches(
+        self,
+        dataset_code: DatasetCode | None = None,
+        status: BatchStatus | None = None,
+    ) -> tuple[ImportBatchRecord, ...]: ...
 
     def get_batch(self, batch_id: BatchId) -> ImportBatchRecord | None: ...
 
@@ -143,9 +153,20 @@ class ControlRepository(Protocol):
         reason: str,
     ) -> PublicationRecord: ...
 
+    def list_publications(self, dataset_code: DatasetCode | None = None) -> tuple[PublicationRecord, ...]: ...
+
+    def get_publication(self, publication_id: str) -> PublicationRecord | None: ...
+
+    def get_active_publication(self, dataset_code: DatasetCode) -> PublicationRecord | None: ...
+
     def insert_quality_result(self, result: QualityResultRecord) -> QualityResultRecord: ...
 
-    def list_quality_results(self, batch_id: BatchId) -> tuple[QualityResultRecord, ...]: ...
+    def list_quality_results(
+        self,
+        batch_id: BatchId | None = None,
+        rule_code: str | None = None,
+        severity: str | None = None,
+    ) -> tuple[QualityResultRecord, ...]: ...
 
     def has_blocking_quality_failure(self, batch_id: BatchId) -> bool: ...
 
@@ -159,6 +180,18 @@ class DbApiControlRepository:
 
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
+
+    def list_datasets(self) -> tuple[DatasetRecord, ...]:
+        rows = self._query(
+            """
+            SELECT dataset_code, display_name, owner, current_schema_version,
+                   status, created_at, updated_at
+            FROM ctl_dataset
+            ORDER BY dataset_code
+            """,
+            (),
+        )
+        return tuple(_dataset_from_row(row) for row in rows)
 
     def get_dataset(self, dataset_code: DatasetCode) -> DatasetRecord | None:
         rows = self._query(
@@ -257,6 +290,19 @@ class DbApiControlRepository:
         )
         return _schema_version_from_row(rows[0]) if rows else None
 
+    def list_schema_versions(self, dataset_code: DatasetCode) -> tuple[SchemaVersionRecord, ...]:
+        rows = self._query(
+            """
+            SELECT dataset_code, schema_version, schema_json, schema_checksum,
+                   compatibility, created_at
+            FROM ctl_schema_version
+            WHERE dataset_code = ?
+            ORDER BY created_at, schema_version
+            """,
+            (str(dataset_code),),
+        )
+        return tuple(_schema_version_from_row(row) for row in rows)
+
     def insert_schema_version(self, schema: SchemaVersionRecord) -> SchemaVersionRecord:
         connection = self._connection_factory()
         cursor = None
@@ -300,6 +346,33 @@ class DbApiControlRepository:
             (str(dataset_code), source_batch_id),
         )
         return _batch_from_row(rows[0]) if rows else None
+
+    def list_batches(
+        self,
+        dataset_code: DatasetCode | None = None,
+        status: BatchStatus | None = None,
+    ) -> tuple[ImportBatchRecord, ...]:
+        where: list[str] = []
+        parameters: list[Any] = []
+        if dataset_code is not None:
+            where.append("dataset_code = ?")
+            parameters.append(str(dataset_code))
+        if status is not None:
+            where.append("status = ?")
+            parameters.append(status.value)
+        condition = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self._query(
+            f"""
+            SELECT batch_id, dataset_code, schema_version, source_batch_id,
+                   source_uri, source_sha256, data_date, row_count, status, error_summary,
+                   created_at, updated_at, published_at
+            FROM ctl_import_batch
+            {condition}
+            ORDER BY created_at DESC, batch_id DESC
+            """,
+            tuple(parameters),
+        )
+        return tuple(_batch_from_row(row) for row in rows)
 
     def get_batch(self, batch_id: BatchId) -> ImportBatchRecord | None:
         rows = self._query(
@@ -640,6 +713,56 @@ class DbApiControlRepository:
             cursor.close()
             connection.close()
 
+    def list_publications(self, dataset_code: DatasetCode | None = None) -> tuple[PublicationRecord, ...]:
+        if dataset_code is None:
+            rows = self._query(
+                """
+                SELECT publication_id, dataset_code, batch_id, schema_version,
+                       status, supersedes_publication_id, published_at, retracted_at
+                FROM ctl_publication
+                ORDER BY published_at DESC, publication_id DESC
+                """,
+                (),
+            )
+        else:
+            rows = self._query(
+                """
+                SELECT publication_id, dataset_code, batch_id, schema_version,
+                       status, supersedes_publication_id, published_at, retracted_at
+                FROM ctl_publication
+                WHERE dataset_code = ?
+                ORDER BY published_at DESC, publication_id DESC
+                """,
+                (str(dataset_code),),
+            )
+        return tuple(_publication_from_row(row) for row in rows)
+
+    def get_publication(self, publication_id: str) -> PublicationRecord | None:
+        rows = self._query(
+            """
+            SELECT publication_id, dataset_code, batch_id, schema_version,
+                   status, supersedes_publication_id, published_at, retracted_at
+            FROM ctl_publication
+            WHERE publication_id = ?
+            """,
+            (publication_id,),
+        )
+        return _publication_from_row(rows[0]) if rows else None
+
+    def get_active_publication(self, dataset_code: DatasetCode) -> PublicationRecord | None:
+        rows = self._query(
+            """
+            SELECT publication_id, dataset_code, batch_id, schema_version,
+                   status, supersedes_publication_id, published_at, retracted_at
+            FROM ctl_publication
+            WHERE dataset_code = ? AND status = 'PUBLISHED'
+            ORDER BY published_at DESC, publication_id DESC
+            LIMIT 1
+            """,
+            (str(dataset_code),),
+        )
+        return _publication_from_row(rows[0]) if rows else None
+
     def insert_quality_result(self, result: QualityResultRecord) -> QualityResultRecord:
         existing = self._query(
             """
@@ -689,16 +812,33 @@ class DbApiControlRepository:
                 cursor.close()
             connection.close()
 
-    def list_quality_results(self, batch_id: BatchId) -> tuple[QualityResultRecord, ...]:
+    def list_quality_results(
+        self,
+        batch_id: BatchId | None = None,
+        rule_code: str | None = None,
+        severity: str | None = None,
+    ) -> tuple[QualityResultRecord, ...]:
+        where: list[str] = []
+        parameters: list[Any] = []
+        if batch_id is not None:
+            where.append("batch_id = ?")
+            parameters.append(str(batch_id))
+        if rule_code is not None:
+            where.append("rule_code = ?")
+            parameters.append(rule_code)
+        if severity is not None:
+            where.append("severity = ?")
+            parameters.append(severity)
+        condition = f"WHERE {' AND '.join(where)}" if where else ""
         rows = self._query(
-            """
+            f"""
             SELECT result_id, batch_id, rule_code, severity, passed,
                    checked_row_count, failure_count, details_json, created_at
             FROM ctl_quality_result
-            WHERE batch_id = ?
+            {condition}
             ORDER BY rule_code
             """,
-            (str(batch_id),),
+            tuple(parameters),
         )
         return tuple(_quality_result_from_row(row) for row in rows)
 

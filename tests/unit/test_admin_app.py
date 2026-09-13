@@ -61,6 +61,12 @@ def test_admin_api_registers_dataset_and_creates_job(tmp_path):
     fetched = client.get("/internal/v1/import-jobs/batch-api-1")
     assert fetched.status_code == 200
     assert fetched.get_json()["data"]["source_batch_id"] == "ods-api-1"
+    datasets = client.get("/internal/v1/datasets")
+    assert datasets.status_code == 200
+    assert datasets.get_json()["data"]["items"][0]["dataset_code"] == "dws.order_hourly"
+    schemas = client.get("/internal/v1/datasets/dws.order_hourly/schemas")
+    assert schemas.status_code == 200
+    assert schemas.get_json()["data"]["items"][0]["schema_version"] == "v1"
 
 
 def test_admin_api_validates_publishes_and_rolls_back(tmp_path):
@@ -96,6 +102,23 @@ def test_admin_api_validates_publishes_and_rolls_back(tmp_path):
     published = client.post("/internal/v1/import-jobs/batch-api-1/publish", json={"actor": "operator"})
     assert published.status_code == 200
     assert published.get_json()["data"]["status"] == "PUBLISHED"
+    publications = client.get("/internal/v1/publications?datasetCode=dws.order_hourly")
+    assert publications.status_code == 200
+    assert len(publications.get_json()["data"]["items"]) == 1
+    publication_id = publications.get_json()["data"]["items"][0]["publication_id"]
+    publication_detail = client.get(f"/internal/v1/publications/{publication_id}")
+    assert publication_detail.status_code == 200
+    assert publication_detail.get_json()["data"]["publication_id"] == publication_id
+    active = client.get("/internal/v1/datasets/dws.order_hourly/active-publication")
+    assert active.status_code == 200
+    assert active.get_json()["data"]["status"] == "PUBLISHED"
+
+    listed_jobs = client.get("/internal/v1/import-jobs?status=PUBLISHED")
+    assert listed_jobs.status_code == 200
+    assert listed_jobs.get_json()["data"]["items"][0]["batch_id"] == "batch-api-1"
+    quality_results = client.get("/internal/v1/quality-results?severity=blocker")
+    assert quality_results.status_code == 200
+    assert len(quality_results.get_json()["data"]["items"]) == 1
 
     missing_actor = client.post("/internal/v1/import-jobs/batch-api-1/publish", json={})
     assert missing_actor.status_code == 400

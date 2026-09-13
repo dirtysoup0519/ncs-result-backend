@@ -12,8 +12,6 @@ CONTROL_TABLES = (
     "ctl_quality_result",
     "ctl_publication",
     "ctl_audit_log",
-    "ml_model_version",
-    "ml_prediction_run",
 )
 
 STAGING_TABLES = ("stg_import_row",)
@@ -96,37 +94,6 @@ CONTROL_SCHEMA_SQL = (
         request_id VARCHAR(128),
         details_json TEXT,
         created_at TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS ml_model_version (
-        model_version VARCHAR(128) PRIMARY KEY,
-        model_code VARCHAR(128) NOT NULL,
-        feature_version VARCHAR(128) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        metrics_json TEXT NOT NULL,
-        artifact_uri TEXT NOT NULL,
-        artifact_sha256 VARCHAR(64) NOT NULL,
-        created_at TIMESTAMP NOT NULL,
-        activated_at TIMESTAMP,
-        retired_at TIMESTAMP,
-        UNIQUE (model_code, model_version)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS ml_prediction_run (
-        prediction_run_id VARCHAR(128) PRIMARY KEY,
-        model_code VARCHAR(128) NOT NULL,
-        model_version VARCHAR(128) NOT NULL,
-        dataset_code VARCHAR(128) NOT NULL,
-        source_batch_id VARCHAR(128) NOT NULL,
-        prediction_date DATE NOT NULL,
-        horizon VARCHAR(16) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        output_uri TEXT,
-        generated_at TIMESTAMP,
-        created_at TIMESTAMP NOT NULL,
-        UNIQUE (model_version, prediction_date, horizon)
     )
     """,
 )

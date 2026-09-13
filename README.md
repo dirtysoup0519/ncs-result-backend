@@ -2,6 +2,8 @@
 
 当前分支已完成工程骨架、Manifest/Schema/质量规则/状态机基础，以及按 V1 冻结合同搭建的查询 API 路由和空数据适配器。真实 MySQL 视图适配仍待上游字段确认。
 
+当前范围只包含处理后数据的结果库、数据管理后端和大屏查询后端。机器学习训练、推理、模型管理及特征处理不在当前范围；上游若提供预测结果，本项目按普通处理后数据集导入和发布。范围决策见 `docs/当前范围决策.md`，历史 ML 原型仅保存在 `archive/ml-control-plane-prototype`。
+
 ## 本地验证
 
 ```powershell
@@ -52,7 +54,7 @@ python scripts/admin_cli.py init-staging-schema --sqlite .local/control.sqlite
 上游批次（含 Manifest 校验和）、规则结果和 Schema 版本幂等；本地 JSON/CSV/TSV 交付先经过 Manifest、Schema、校验和质量检查，再创建导入批次，并可写入只保存原始 JSON 行的 staging 表。质量结果中的 `BLOCKER/ERROR` 会阻断进入 `READY`，发布和回滚会在事务中切换活动发布记录并写入审计日志。实现位于
 `src/ncs_backend/admin/importers.py`、`src/ncs_backend/admin/staging.py`、`src/ncs_backend/admin/repositories.py` 和 `src/ncs_backend/admin/services.py`；正式 JDBC/Sqoop 导入通道和具体质量规则编排将在后续迭代接入。
 
-管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记、批次创建/查询、质量完成、质量结果查询、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
+管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记/列表、Schema 列表、批次创建/查询/筛选、质量完成与筛选查询、发布历史/详情、当前活动发布、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
 
 代码边界和后续阶段见：
 
@@ -63,3 +65,4 @@ python scripts/admin_cli.py init-staging-schema --sqlite .local/control.sqlite
 - `docs/前端接口协议.md`
 - `docs/前端启动元数据接口简表.md`
 - `docs/data-contract.md`
+- `docs/当前范围决策.md`

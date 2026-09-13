@@ -17,6 +17,7 @@ from ncs_backend.admin.services import (
 )
 from ncs_backend.shared.contracts.manifest import DatasetManifest
 from ncs_backend.shared.contracts.schema import DatasetSchema
+from ncs_backend.shared.domain.enums import BatchStatus
 from ncs_backend.shared.domain.identifiers import BatchId, DatasetCode, SchemaVersion
 from ncs_backend.shared.config import Settings
 from ncs_backend.shared.errors import AppError
@@ -100,9 +101,19 @@ def create_app(
         )
         return success({"dataset": dataset, "schema": schema_record}, 201)
 
+    @app.get("/internal/v1/datasets")
+    def list_datasets():
+        return success({"items": require("registry").list()})
+
     @app.get("/internal/v1/datasets/<dataset_code>")
     def get_dataset(dataset_code: str):
         return success(require("registry").get(_dataset_code(dataset_code)))
+
+    @app.get("/internal/v1/datasets/<dataset_code>/schemas")
+    def list_schemas(dataset_code: str):
+        code = _dataset_code(dataset_code)
+        require("registry").get(code)
+        return success({"datasetCode": code, "items": require("registry").list_schemas(code)})
 
     @app.post("/internal/v1/import-jobs")
     def create_import_job():
@@ -125,6 +136,17 @@ def create_app(
     @app.get("/internal/v1/import-jobs/<batch_id>")
     def get_import_job(batch_id: str):
         return success(require("batch").get(_batch_id(batch_id)))
+
+    @app.get("/internal/v1/import-jobs")
+    def list_import_jobs():
+        dataset_code = request.args.get("datasetCode")
+        status_value = request.args.get("status")
+        try:
+            code = _dataset_code(dataset_code) if dataset_code else None
+            status = BatchStatus(status_value) if status_value else None
+        except ValueError as exc:
+            raise AppError("VALIDATION_INVALID_PARAMETER", str(exc), 400) from exc
+        return success({"items": require("batch").list(code, status)})
 
     @app.post("/internal/v1/import-jobs/<batch_id>/validate")
     def validate_import_job(batch_id: str):
@@ -157,6 +179,23 @@ def create_app(
         batch = require("batch").get(_batch_id(batch_id))
         return success({"batchId": batch.batch_id, "items": require("quality").list_results(batch.batch_id)})
 
+    @app.get("/internal/v1/quality-results")
+    def list_quality_results():
+        batch_value = request.args.get("batchId")
+        batch_id = _batch_id(batch_value) if batch_value else None
+        severity = request.args.get("severity")
+        if severity:
+            severity = severity.upper()
+        return success(
+            {
+                "items": require("quality").list_results(
+                    batch_id,
+                    rule_code=request.args.get("ruleCode"),
+                    severity=severity,
+                )
+            }
+        )
+
     @app.post("/internal/v1/import-jobs/<batch_id>/publish")
     def publish_import_job(batch_id: str):
         payload = body()
@@ -183,6 +222,22 @@ def create_app(
             request_id=payload.get("requestId") or request.headers.get("X-Request-ID"),
         )
         return success(publication)
+
+    @app.get("/internal/v1/publications")
+    def list_publications():
+        dataset_code = request.args.get("datasetCode")
+        code = _dataset_code(dataset_code) if dataset_code else None
+        return success({"items": require("publication").list(code)})
+
+    @app.get("/internal/v1/publications/<publication_id>")
+    def get_publication(publication_id: str):
+        if not publication_id.strip():
+            raise AppError("VALIDATION_INVALID_PARAMETER", "publicationId is invalid", 400)
+        return success(require("publication").get(publication_id))
+
+    @app.get("/internal/v1/datasets/<dataset_code>/active-publication")
+    def active_publication(dataset_code: str):
+        return success(require("publication").active(_dataset_code(dataset_code)))
 
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):

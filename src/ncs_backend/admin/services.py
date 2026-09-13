@@ -136,6 +136,13 @@ class BatchService:
             raise BatchNotFoundError(batch_id)
         return batch
 
+    def list(
+        self,
+        dataset_code: DatasetCode | None = None,
+        status: BatchStatus | None = None,
+    ) -> tuple[ImportBatchRecord, ...]:
+        return self._repository.list_batches(dataset_code, status)
+
 
 class DatasetRegistryService:
     """Register stable dataset metadata and immutable schema versions."""
@@ -151,6 +158,12 @@ class DatasetRegistryService:
         if dataset is None:
             raise AppError("DATASET_NOT_FOUND", f"dataset {dataset_code} does not exist", 404)
         return dataset
+
+    def list(self) -> tuple[DatasetRecord, ...]:
+        return self._repository.list_datasets()
+
+    def list_schemas(self, dataset_code: DatasetCode) -> tuple[SchemaVersionRecord, ...]:
+        return self._repository.list_schema_versions(dataset_code)
 
     def register_schema(
         self,
@@ -282,8 +295,13 @@ class QualityService:
         self._repository = repository
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
-    def list_results(self, batch_id: BatchId) -> tuple[QualityResultRecord, ...]:
-        return self._repository.list_quality_results(batch_id)
+    def list_results(
+        self,
+        batch_id: BatchId | None = None,
+        rule_code: str | None = None,
+        severity: str | None = None,
+    ) -> tuple[QualityResultRecord, ...]:
+        return self._repository.list_quality_results(batch_id, rule_code, severity)
 
     def record(
         self,
@@ -352,6 +370,18 @@ class PublicationService:
     def __init__(self, repository: ControlRepository, clock: Clock | None = None) -> None:
         self._repository = repository
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def list(self, dataset_code: DatasetCode | None = None) -> tuple[PublicationRecord, ...]:
+        return self._repository.list_publications(dataset_code)
+
+    def active(self, dataset_code: DatasetCode) -> PublicationRecord | None:
+        return self._repository.get_active_publication(dataset_code)
+
+    def get(self, publication_id: str) -> PublicationRecord:
+        publication = self._repository.get_publication(publication_id)
+        if publication is None:
+            raise AppError("PUBLICATION_NOT_FOUND", f"publication {publication_id} does not exist", 404)
+        return publication
 
     def publish(
         self,

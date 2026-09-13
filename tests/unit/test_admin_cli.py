@@ -56,8 +56,6 @@ def test_control_schema_initialization_is_idempotent(tmp_path, capsys):
         "ctl_quality_result",
         "ctl_publication",
         "ctl_audit_log",
-        "ml_model_version",
-        "ml_prediction_run",
     } <= tables
     assert '"initialized": true' in capsys.readouterr().out
 
