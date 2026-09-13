@@ -54,6 +54,18 @@ class ViewContractResult:
     compatible: bool
     error: str | None = None
 
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-friendly diagnostic representation."""
+
+        return {
+            "viewName": self.view_name,
+            "exists": self.exists,
+            "columns": list(self.columns),
+            "missingColumns": list(self.missing_columns),
+            "compatible": self.compatible,
+            "error": self.error,
+        }
+
 
 def inspect_view_contracts(connection_factory: ConnectionFactory) -> tuple[ViewContractResult, ...]:
     """Inspect only the allowlisted API views and return a deterministic report."""

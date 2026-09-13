@@ -22,6 +22,8 @@ def test_view_contract_reports_missing_views_without_using_physical_tables(tmp_p
     assert overview.compatible is True
     assert ranking.exists is False
     assert ranking.compatible is False
+    assert overview.to_dict()["viewName"] == "api_v1_dashboard_overview"
+    assert ranking.to_dict()["missingColumns"]
 
     with pytest.raises(RuntimeError, match="read-only view contract"):
         assert_view_contracts(lambda: sqlite3.connect(database))
