@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 from ncs_backend.shared.contracts.manifest import DatasetManifest
 from ncs_backend.shared.contracts.quality import NonNullRule, QualityValidator, RowCountRule, SchemaRule, UniqueKeyRule
 from ncs_backend.shared.contracts.schema import DatasetSchema
+from ncs_backend.admin.migrations import CONTROL_TABLES, initialize_control_schema
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--schema", type=Path, required=True)
     validate.add_argument("--manifest", type=Path, required=True)
     validate.add_argument("--data", type=Path, required=True)
+    initialize = subparsers.add_parser("init-control-schema", help="initialize the local control-plane schema")
+    initialize.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
     return parser
 
 
@@ -65,6 +69,16 @@ def validate_delivery(schema_path: Path, manifest_path: Path, data_path: Path) -
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "init-control-schema":
+        args.sqlite.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(args.sqlite)
+        try:
+            tables = initialize_control_schema(connection)
+        finally:
+            connection.close()
+        print(json.dumps({"initialized": True, "database": str(args.sqlite), "tables": list(tables)}, ensure_ascii=False, indent=2))
+        return 0
+
     result = validate_delivery(args.schema, args.manifest, args.data)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["passed"] else 2

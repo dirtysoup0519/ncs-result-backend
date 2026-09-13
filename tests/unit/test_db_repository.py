@@ -23,6 +23,34 @@ def _repository(tmp_path):
         );
         INSERT INTO api_v1_station_ranking VALUES
           ('S1', '站点一', 3, '30.50', '100.00', '2019-09-13', 'rank:b1', '2026-09-13T06:00:00+08:00', 'FRESH');
+        CREATE TABLE api_v1_station_hour_heatmap (
+            station_id TEXT, station_name TEXT, hour INTEGER, value TEXT,
+            is_observed INTEGER, metric TEXT, metric_code TEXT, unit TEXT,
+            data_date TEXT, data_version TEXT, generated_at TEXT, staleness TEXT
+        );
+        INSERT INTO api_v1_station_hour_heatmap VALUES
+          ('S1', '站点一', 8, '12.50', 1, 'kwh', 'charging_energy', 'kWh', '2019-09-13', 'heat:b1', '2026-09-13T06:00:00+08:00', 'FRESH');
+        CREATE TABLE api_v1_weekday_weekend (
+            day_type TEXT, metric_key TEXT, label TEXT, unit TEXT, metric_order INTEGER,
+            max_value TEXT, raw_value TEXT, normalized_value TEXT,
+            normalization_method TEXT, normalization_version TEXT,
+            start_date TEXT, end_date TEXT, data_version TEXT,
+            generated_at TEXT, staleness TEXT
+        );
+        INSERT INTO api_v1_weekday_weekend VALUES
+          ('WEEKDAY', 'order_count', '订单量', 'count', 1, NULL, '10', NULL, NULL, NULL, '2019-09-01', '2019-09-13', 'profile:b1', '2026-09-13T06:00:00+08:00', 'FRESH'),
+          ('WEEKEND', 'order_count', '订单量', 'count', 1, NULL, '4', NULL, NULL, NULL, '2019-09-01', '2019-09-13', 'profile:b1', '2026-09-13T06:00:00+08:00', 'FRESH');
+        CREATE TABLE api_v1_load_prediction (
+            series_type TEXT, target_time TEXT, order_count INTEGER, charging_energy TEXT,
+            lower_bound TEXT, upper_bound TEXT, prediction_date TEXT, cutoff_hour INTEGER,
+            forecast_start_at TEXT, interval_available INTEGER, confidence_level TEXT,
+            model_version TEXT, prediction_run_id TEXT, generated_at TEXT,
+            data_version TEXT, staleness TEXT
+        );
+        INSERT INTO api_v1_load_prediction VALUES
+          ('ACTUAL', '2019-09-13T15:00:00+08:00', 8, '12.00', NULL, NULL, '2019-09-13', 16, '2019-09-13T16:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('ACTUAL', '2019-09-13T16:00:00+08:00', 9, '13.00', NULL, NULL, '2019-09-13', 16, '2019-09-13T16:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-13T16:00:00+08:00', NULL, '13.50', '11.00', '16.00', '2019-09-13', 16, '2019-09-13T16:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH');
         """
     )
     connection.commit()
@@ -52,3 +80,32 @@ def test_db_repository_applies_default_latest_ranking_and_limit(tmp_path):
     assert result.data["items"][0]["rank"] == 1
     assert result.data["items"][0]["value"] == "30.50"
     assert repository.is_available("ranking") is True
+
+
+def test_db_repository_fills_heatmap_hours_and_keeps_observation_flag(tmp_path):
+    repository = _repository(tmp_path)
+
+    result = repository.fetch("heatmap", {"metric": "kwh"})
+
+    assert result.data["availability"] == "AVAILABLE"
+    assert len(result.data["points"]) == 24
+    assert result.data["points"][8] == {
+        "stationId": "S1",
+        "hour": 8,
+        "value": "12.50",
+        "isObserved": True,
+    }
+    assert result.data["points"][0]["isObserved"] is False
+
+
+def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
+    repository = _repository(tmp_path)
+
+    profile = repository.fetch("weekday_weekend", {})
+    assert profile.data["series"][0]["rawValues"] == [10]
+    assert profile.data["series"][1]["rawValues"] == [4]
+
+    prediction = repository.fetch("prediction", {"date": "2019-09-13", "cutoffHour": 16})
+    assert len(prediction.data["actual"]) == 1
+    assert prediction.data["actual"][0]["time"].endswith("15:00:00+08:00")
+    assert len(prediction.data["forecast"]) == 1

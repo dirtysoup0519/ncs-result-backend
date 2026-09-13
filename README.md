@@ -33,6 +33,14 @@ python scripts/admin_cli.py validate-delivery `
   --data contracts/examples/station-hourly.rows.v1.json
 ```
 
+初始化本地控制面 SQLite：
+
+```powershell
+python scripts/admin_cli.py init-control-schema --sqlite .local/control.sqlite
+```
+
+该命令只创建控制表，支持重复执行；真实 MySQL 迁移和生产凭据接入仍需单独配置。
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`

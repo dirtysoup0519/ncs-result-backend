@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 from ncs_backend.admin.cli import main, validate_delivery
 
@@ -34,3 +35,28 @@ def test_admin_cli_returns_success(capsys):
     )
     assert exit_code == 0
     assert '"passed": true' in capsys.readouterr().out
+
+
+def test_control_schema_initialization_is_idempotent(tmp_path, capsys):
+    database = tmp_path / "control.sqlite"
+
+    assert main(["init-control-schema", "--sqlite", str(database)]) == 0
+    assert main(["init-control-schema", "--sqlite", str(database)]) == 0
+
+    connection = sqlite3.connect(database)
+    tables = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    connection.close()
+    assert {
+        "ctl_dataset",
+        "ctl_schema_version",
+        "ctl_import_batch",
+        "ctl_quality_result",
+        "ctl_publication",
+        "ctl_audit_log",
+        "ml_model_version",
+        "ml_prediction_run",
+    } <= tables
+    assert '"initialized": true' in capsys.readouterr().out
