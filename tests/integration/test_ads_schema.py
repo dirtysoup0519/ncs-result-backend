@@ -144,3 +144,40 @@ def test_station_hour_daily_heatmap_aggregates_period_and_selects_top_stations(t
     assert result.data["points"][1]["isObserved"] is True
     assert result.data["valueRange"]["min"] == "0"
     assert result.data["valueRange"]["max"] == "25"
+
+
+def test_process_daily_summary_uses_record_weighted_period_averages(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        initialize_ads_result_schema(connection)
+        rows = [
+            ("process-batch", "2019-01-01", "ALL_STATIONS", "", "2019-01-01", "2019-01-01", 2, 2, "50", "-20", "300", "30", "v2.3"),
+            ("process-batch", "2019-02-01", "ALL_STATIONS", "", "2019-02-01", "2019-02-01", 3, 3, "70", "-40", "360", "40", "v2.3"),
+        ]
+        connection.executemany(
+            "INSERT INTO rpt_process_summary (batch_id, data_date, scope_type, station_id, start_date, end_date, record_count, session_count, average_soc, average_current, average_voltage, average_max_temperature, data_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.execute(
+            "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("process-batch", "process_daily", "2.0.0", "source", "ads://source", "d" * 64, "2019-02-01", 2, "PUBLISHED"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            ("process-pub", "process_daily", "process-batch", "2.0.0", "PUBLISHED"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    repository = DbApiDashboardRepository(lambda: sqlite3.connect(database))
+    result = repository.fetch("process_summary", {})
+
+    assert result.data["recordCount"] == 5
+    assert result.data["sessionCount"] == 5
+    assert result.data["metrics"][0]["value"] == "0.62"
+    assert result.data["metrics"][1]["value"] == "-32"
+    assert result.data["metrics"][2]["value"] == "336"
+    assert result.data["metrics"][3]["value"] == "36"
