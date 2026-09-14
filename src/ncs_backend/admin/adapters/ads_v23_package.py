@@ -1,4 +1,4 @@
-"""Reader and integrity validator for the ADS Spark v2.3 contract package."""
+"""Reader and integrity validator for the versioned ADS contract package."""
 
 from __future__ import annotations
 
@@ -10,14 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from ncs_backend.admin.adapters.ads_v23_schema import (
-    ADS_V23_DATASET_SPECS,
-    ADS_V23_SPECS_BY_CODE,
     AdsV23DatasetSpec,
+    specs_for_schema_version,
 )
 
 
 class AdsV23PackageError(ValueError):
-    """Raised when a v2.3 package violates its manifest or CSV contract."""
+    """Raised when an ADS package violates its manifest or CSV contract."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +54,13 @@ class AdsV23PackageReader:
         entries = manifest.get("datasets")
         if not isinstance(entries, list):
             raise AdsV23PackageError("package manifest datasets must be an array")
+        schema_version = self._required_string(manifest, "schemaVersion")
+        try:
+            specs = specs_for_schema_version(schema_version)
+        except ValueError as exc:
+            raise AdsV23PackageError(str(exc)) from exc
         by_code = {entry.get("datasetCode"): entry for entry in entries if isinstance(entry, dict)}
-        expected_codes = {spec.dataset_code for spec in ADS_V23_DATASET_SPECS}
+        expected_codes = {spec.dataset_code for spec in specs}
         if set(by_code) != expected_codes:
             raise AdsV23PackageError(
                 f"package dataset set mismatch; missing={sorted(expected_codes - set(by_code))}, "
@@ -64,7 +68,7 @@ class AdsV23PackageReader:
             )
 
         descriptors: list[AdsV23DatasetDescriptor] = []
-        for spec in ADS_V23_DATASET_SPECS:
+        for spec in specs:
             entry = by_code[spec.dataset_code]
             if entry.get("file") != spec.filename:
                 raise AdsV23PackageError(f"unexpected file for {spec.dataset_code}: {entry.get('file')}")
@@ -94,7 +98,7 @@ class AdsV23PackageReader:
         return AdsV23PackageDescriptor(
             root=contract_root.resolve(),
             source_batch_id=self._required_string(manifest, "batchId"),
-            schema_version=self._required_string(manifest, "schemaVersion"),
+            schema_version=schema_version,
             metric_version=self._required_string(manifest, "metricVersion"),
             status="SUCCESS",
             load_mode=self._required_string(manifest, "loadMode"),
@@ -114,7 +118,11 @@ class AdsV23PackageReader:
         return package_root
 
     def read_rows(self, package: AdsV23PackageDescriptor, dataset_code: str) -> tuple[dict[str, str], ...]:
-        spec = ADS_V23_SPECS_BY_CODE.get(dataset_code)
+        try:
+            specs = specs_for_schema_version(package.schema_version)
+        except ValueError as exc:
+            raise AdsV23PackageError(str(exc)) from exc
+        spec = next((item for item in specs if item.dataset_code == dataset_code), None)
         if spec is None:
             raise AdsV23PackageError(f"dataset is not present in package: {dataset_code}")
         return tuple(self._read_rows(package.root / spec.filename, spec))

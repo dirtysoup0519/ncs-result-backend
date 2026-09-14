@@ -1,4 +1,4 @@
-"""Import and publish one ADS Spark v2.3 contract package."""
+"""Import and publish one versioned ADS Spark contract package (v2.3/v2.5)."""
 
 import argparse
 import json
@@ -16,7 +16,7 @@ from ncs_backend.shared.db import SQLITE_DIALECT
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Import and publish an ADS Spark v2.3 package")
+    parser = argparse.ArgumentParser(description="Import and publish an ADS Spark contract package")
     parser.add_argument("--package", type=Path, required=True, help="extracted package directory or its parent directory")
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--sqlite", type=Path, help="SQLite database path (local development only)")

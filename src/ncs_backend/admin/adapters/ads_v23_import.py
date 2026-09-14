@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from ncs_backend.admin.adapters.ads_v23_package import AdsV23PackageDescriptor, AdsV23PackageReader
+from ncs_backend.admin.adapters.ads_v23_schema import specs_for_schema_version
 from ncs_backend.admin.ads_schema import initialize_ads_result_schema
 from ncs_backend.admin.migrations import MigrationRunner
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
@@ -20,6 +21,7 @@ V23_DATASETS = (
     "station_reference", "duration_distribution", "weekday_weekend_profile",
     "station_hour_daily", "process_daily", "load_hourly",
 )
+V25_DATASETS = tuple(spec.dataset_code for spec in specs_for_schema_version("2.2.0"))
 PLATFORM_LABELS = {"android": "Android", "ios": "iOS", "web": "Web"}
 
 
@@ -46,11 +48,12 @@ class AdsV23Importer:
         self._initialize_schema = initialize_schema
 
     def import_package(self, package: AdsV23PackageDescriptor) -> tuple[str, ...]:
+        datasets = V25_DATASETS if package.schema_version.startswith("2.2") else V23_DATASETS
         codes = {item.dataset_code for item in package.datasets}
-        missing = sorted(set(self.DATASETS) - codes)
+        missing = sorted(set(datasets) - codes)
         if missing:
             raise AdsV23ImportError(f"required dataset is missing: {missing}")
-        rows = {code: self._reader.read_rows(package, code) for code in self.DATASETS}
+        rows = {code: self._reader.read_rows(package, code) for code in datasets}
         self._check_consistency(rows)
         connection = self._connection_factory()
         if self._initialize_schema:
@@ -61,11 +64,12 @@ class AdsV23Importer:
         package_hash = _package_hash(package)
         published: list[str] = []
         try:
-            self._assert_v23_schema(cursor)
-            for code in self.DATASETS:
+            self._assert_v23_schema(cursor, datasets)
+            for code in datasets:
                 descriptor = next(item for item in package.datasets if item.dataset_code == code)
                 batch_id = _batch_id(package.source_batch_id, code)
                 self._ensure_control(cursor, package, descriptor, batch_id, package_hash, now)
+                self._supersede_other_publications(cursor, code, batch_id, now)
                 if self._is_published(cursor, code, batch_id):
                     published.append(code)
                     continue
@@ -93,8 +97,10 @@ class AdsV23Importer:
             connection.close()
 
     @staticmethod
-    def _assert_v23_schema(cursor) -> None:
-        required = ("rpt_station_daily", "rpt_station_reference", "rpt_station_hour_daily", "rpt_load_hourly")
+    def _assert_v23_schema(cursor, datasets=V23_DATASETS) -> None:
+        required = ["rpt_station_daily", "rpt_station_reference", "rpt_station_hour_daily", "rpt_load_hourly"]
+        if "station_top10_snapshot" in datasets:
+            required.extend(("rpt_station_top10_snapshot", "rpt_station_hour_heatmap_profile", "rpt_revenue_monthly", "rpt_kpi_period_comparison", "rpt_weekday_hour_profile", "rpt_charge_type_distribution", "rpt_station_charge_type", "rpt_process_overview"))
         try:
             for table in required:
                 cursor.execute(f"SELECT 1 FROM {table} LIMIT 0")
@@ -127,7 +133,7 @@ class AdsV23Importer:
         if cursor.fetchone() is None:
             cursor.execute(
                 "INSERT INTO ctl_dataset (dataset_code, display_name, owner, current_schema_version, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)",
-                (descriptor.dataset_code, descriptor.dataset_code, "ads-v2.3", package.schema_version, _timestamp(now), _timestamp(now)),
+                (descriptor.dataset_code, descriptor.dataset_code, "ads-v2.5" if package.schema_version.startswith("2.2") else "ads-v2.3", package.schema_version, _timestamp(now), _timestamp(now)),
             )
         cursor.execute(
             "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)",
@@ -138,6 +144,15 @@ class AdsV23Importer:
     def _is_published(cursor, dataset_code: str, batch_id: str) -> bool:
         cursor.execute("SELECT 1 FROM ctl_publication WHERE dataset_code = ? AND batch_id = ? AND status = 'PUBLISHED'", (dataset_code, batch_id))
         return cursor.fetchone() is not None
+
+    @staticmethod
+    def _supersede_other_publications(cursor, dataset_code: str, batch_id: str, now: datetime) -> None:
+        """Keep one visible publication per dataset during an atomic package switch."""
+        cursor.execute(
+            "UPDATE ctl_publication SET status = 'SUPERSEDED', retracted_at = ? "
+            "WHERE dataset_code = ? AND status = 'PUBLISHED' AND batch_id <> ?",
+            (_timestamp(now), dataset_code, batch_id),
+        )
 
     def _insert_rows(self, cursor, code, batch_id, rows, package, now) -> None:
         version = package.metric_version
@@ -179,6 +194,22 @@ class AdsV23Importer:
             cursor.executemany("INSERT INTO rpt_process_summary (batch_id, data_date, scope_type, station_id, start_date, end_date, record_count, session_count, average_soc, average_current, average_voltage, average_max_temperature, data_version, generated_at, loaded_at) VALUES (?, ?, 'ALL_STATIONS', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [(batch_id, row["data_date"], row["data_date"], row["data_date"], _integer(row["record_count"]), _integer(row["session_count"]), _decimal(row["avg_soc"]), _decimal(row["avg_current"]), _decimal(row["avg_pack_voltage"]), _decimal(row["avg_max_temperature"]), version, stamp, stamp) for row in rows])
         elif code == "load_hourly":
             cursor.executemany("INSERT INTO rpt_load_hourly (batch_id, stat_time, total_kwh, order_count, is_observed, fill_method, time_quality, allocation_method, data_version, generated_at, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [(batch_id, row["stat_time"], _decimal(row["total_kwh"]), _integer(row["order_count"]), _boolean(row["is_observed"]), row["fill_method"], row["time_quality"], row["allocation_method"], version, stamp, stamp) for row in rows])
+        elif code == "station_top10_snapshot":
+            cursor.executemany("INSERT INTO rpt_station_top10_snapshot (batch_id,start_date,end_date,rank_order,station_id,station_name,location_id,order_count,total_kwh,total_fees,ranking_metric,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], _integer(r["rank_order"]), r["station_id"], r["station_name"], r["location_id"], _integer(r["order_count"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), r["ranking_metric"], version, stamp, stamp) for r in rows])
+        elif code == "station_hour_heatmap_profile":
+            cursor.executemany("INSERT INTO rpt_station_hour_heatmap_profile (batch_id,start_date,end_date,station_rank,station_id,station_name,stat_hour,order_count,total_kwh,total_fees,is_filled_zero,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], _integer(r["station_rank"]), r["station_id"], r["station_name"], _hour(r["stat_hour"]), _integer(r["order_count"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), _boolean(r["is_filled_zero"]), version, stamp, stamp) for r in rows])
+        elif code == "revenue_monthly":
+            cursor.executemany("INSERT INTO rpt_revenue_monthly (batch_id,stat_month,order_count,total_kwh,total_fees,user_count,active_station_count,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["stat_month"], _integer(r["order_count"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), _integer(r["user_count"]), _integer(r["active_station_count"]), version, stamp, stamp) for r in rows])
+        elif code == "kpi_period_comparison":
+            cursor.executemany("INSERT INTO rpt_kpi_period_comparison (batch_id,current_period,previous_period,metric_code,metric_name,unit,current_value,previous_value,change_pct,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["current_period"], r["previous_period"], r["metric_code"], r["metric_name"], r["unit"], _decimal(r["current_value"]), _decimal(r["previous_value"]), _decimal(r["change_pct"]), version, stamp, stamp) for r in rows])
+        elif code == "weekday_hour_profile":
+            cursor.executemany("INSERT INTO rpt_weekday_hour_profile (batch_id,start_date,end_date,day_type,stat_hour,order_count,total_kwh,total_fees,avg_charge_hours,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], r["day_type"], _hour(r["stat_hour"]), _integer(r["order_count"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), _decimal(r["avg_charge_hours"]), version, stamp, stamp) for r in rows])
+        elif code == "charge_type_distribution":
+            cursor.executemany("INSERT INTO rpt_charge_type_distribution (batch_id,start_date,end_date,facility_type,charge_type,order_count,order_ratio,total_kwh,total_fees,avg_charge_hours,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], r["facility_type"], r["charge_type"], _integer(r["order_count"]), _ratio(r["order_ratio"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), _decimal(r["avg_charge_hours"]), version, stamp, stamp) for r in rows])
+        elif code == "station_charge_type":
+            cursor.executemany("INSERT INTO rpt_station_charge_type (batch_id,start_date,end_date,station_id,station_name,facility_type,charge_type,order_count,total_kwh,total_fees,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], r["station_id"], r["station_name"], r["facility_type"], r["charge_type"], _integer(r["order_count"]), _decimal(r["total_kwh"]), _decimal(r["total_fees"]), version, stamp, stamp) for r in rows])
+        elif code == "process_overview":
+            cursor.executemany("INSERT INTO rpt_process_overview (batch_id,start_date,end_date,record_count,session_count,avg_soc,avg_temperature,avg_pack_voltage,avg_current,record_time_source,data_version,generated_at,loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [(batch_id, r["start_date"], r["end_date"], _integer(r["record_count"]), _integer(r["session_count"]), _decimal(r["avg_soc"]), _decimal(r["avg_temperature"]), _decimal(r["avg_pack_voltage"]), _decimal(r["avg_current"]), r["record_time_source"], version, stamp, stamp) for r in rows])
 
 
 def _batch_id(source: str, code: str) -> str:
@@ -191,8 +222,14 @@ def _package_hash(package: AdsV23PackageDescriptor) -> str:
 
 def _source_date(code: str, package: AdsV23PackageDescriptor, reader: AdsV23PackageReader) -> str:
     rows = reader.read_rows(package, code)
-    if code in {"dashboard_overview", "platform_distribution", "duration_distribution", "weekday_weekend_profile"}:
+    if code in {"dashboard_overview", "platform_distribution", "duration_distribution", "weekday_weekend_profile", "station_top10_snapshot", "station_hour_heatmap_profile", "weekday_hour_profile", "charge_type_distribution", "station_charge_type", "process_overview"}:
         return rows[0]["end_date"]
+    if code == "revenue_monthly":
+        month = max(row["stat_month"] for row in rows)
+        return f"{month}-01" if len(month) == 7 else month
+    if code == "kpi_period_comparison":
+        period = max(row["current_period"] for row in rows)
+        return f"{period}-01" if len(period) == 7 else period
     if code == "station_reference":
         return reader.read_rows(package, "dashboard_overview")[0]["end_date"]
     if code == "load_hourly":
