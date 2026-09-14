@@ -14,7 +14,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 PREDICTION_MIGRATION_TABLE = "ctl_prediction_schema_migration"
-PREDICTION_MIGRATION_VERSION = 1
+PREDICTION_MIGRATION_VERSION = 2
 PREDICTION_TABLES = ("ctl_model_version", "ctl_prediction_run", "rpt_load_prediction")
 PREDICTION_VIEW_NAMES = ("api_v1_load_prediction",)
 
@@ -102,6 +102,28 @@ JOIN ctl_prediction_run pr ON pr.prediction_run_id = r.prediction_run_id
 WHERE pr.status = 'PUBLISHED'
 """
 
+PREDICTION_V1_STATEMENTS = (
+    *PREDICTION_SCHEMA_SQL,
+    *PREDICTION_MYSQL_INDEX_SQL,
+    "DROP VIEW IF EXISTS api_v1_load_prediction",
+    PREDICTION_VIEW_SQL,
+)
+PREDICTION_V2_STATEMENTS = (
+    "ALTER TABLE rpt_load_prediction ADD COLUMN horizon INTEGER NOT NULL DEFAULT 24",
+    "DROP VIEW IF EXISTS api_v1_load_prediction",
+    """
+    CREATE VIEW api_v1_load_prediction AS
+    SELECT r.series_type, r.target_time, r.order_count, r.charging_energy,
+           r.lower_bound, r.upper_bound, r.prediction_date, r.cutoff_hour,
+           r.forecast_start_at, r.interval_available, r.confidence_level,
+           r.model_version, r.prediction_run_id, r.generated_at,
+           r.data_version, r.staleness, r.horizon
+    FROM rpt_load_prediction r
+    JOIN ctl_prediction_run pr ON pr.prediction_run_id = r.prediction_run_id
+    WHERE pr.status = 'PUBLISHED'
+    """,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PredictionSchemaResult:
@@ -121,33 +143,34 @@ def initialize_prediction_schema(
     schema_sql: Iterable[str] | None = None,
 ) -> PredictionSchemaResult:
     """Create prediction tables and the read-only API view idempotently."""
-    statements = tuple(schema_sql) if schema_sql is not None else (
-        (*PREDICTION_SCHEMA_SQL, *(
-            PREDICTION_MYSQL_INDEX_SQL if dialect.name == "mysql" else PREDICTION_INDEX_SQL
-        ), f"DROP VIEW IF EXISTS {PREDICTION_VIEW_NAMES[0]}", PREDICTION_VIEW_SQL)
-    )
-    checksum = hashlib.sha256("\n".join(item.strip() for item in statements).encode("utf-8")).hexdigest()
+    if schema_sql is not None:
+        migrations = ((PREDICTION_MIGRATION_VERSION, tuple(schema_sql)),)
+    else:
+        v1 = (*PREDICTION_SCHEMA_SQL, *(PREDICTION_MYSQL_INDEX_SQL if dialect.name == "mysql" else PREDICTION_INDEX_SQL), "DROP VIEW IF EXISTS api_v1_load_prediction", PREDICTION_VIEW_SQL)
+        migrations = ((1, v1), (2, PREDICTION_V2_STATEMENTS))
     cursor = dialect.cursor(connection)
     try:
         cursor.execute(
             f"CREATE TABLE IF NOT EXISTS {PREDICTION_MIGRATION_TABLE} (version INTEGER PRIMARY KEY, checksum VARCHAR(64) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        rows = cursor.execute(
-            f"SELECT checksum FROM {PREDICTION_MIGRATION_TABLE} WHERE version = ?",
-            (PREDICTION_MIGRATION_VERSION,),
-        ).fetchall()
-        if rows and str(rows[0][0]) != checksum:
-            raise PredictionSchemaMigrationError("prediction schema checksum mismatch")
-        if not rows:
+        applied = False
+        for version, statements in migrations:
+            checksum = hashlib.sha256("\n".join(item.strip() for item in statements).encode("utf-8")).hexdigest()
+            rows = cursor.execute(
+                f"SELECT checksum FROM {PREDICTION_MIGRATION_TABLE} WHERE version = ?",
+                (version,),
+            ).fetchall()
+            if rows:
+                if str(rows[0][0]) != checksum:
+                    raise PredictionSchemaMigrationError(f"prediction schema checksum mismatch at version {version}")
+                continue
             for statement in statements:
                 cursor.execute(statement)
             cursor.execute(
                 f"INSERT INTO {PREDICTION_MIGRATION_TABLE} (version, checksum, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                (PREDICTION_MIGRATION_VERSION, checksum),
+                (version, checksum),
             )
             applied = True
-        else:
-            applied = False
         connection.commit()
     except Exception:
         connection.rollback()
