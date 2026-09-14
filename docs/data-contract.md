@@ -138,7 +138,24 @@ API 契约：前端可见的稳定 camelCase 字段
 | `user_segment` | 日期/用户分层 | 分层代码 | 人数、次数、时长、消费 | P1，数据可用时启用 |
 | `battery_health` | 日期/健康等级/区域 | 健康等级、区域 | 数量、占比、异常率 | P1，数据可用时启用 |
 
-### 6.2 机器学习数据集
+### 6.2 站点参考数据集当前来源映射
+
+ODS 于 2026-09-14 提供的 `nvv2t_md_end(1).csv` 可作为 `station_reference` 的脱敏样例。当前确认映射如下：
+
+| ODS 字段 | 合同字段 | 当前约束 |
+| --- | --- | --- |
+| `stationId` | `station_id` | 105 行全部唯一；按字符串标识符处理 |
+| `locationId` | `location_id` | 可重复，不作为主键；业务语义待确认 |
+| `facilityType` | `facility_type_code` | 枚举为 1～4，显示含义待确认 |
+| `station_name` | `station_name` | 非空 |
+| `address` | `address` | 非空，不从文本推断正式行政区编码 |
+| `device_count` | `device_count` | 当前范围 1～40；计数对象待确认 |
+| `open_time` | `open_hours_text` | 当前全部为 `00:00-24:00`，复杂格式待确认 |
+| `update_time` | `source_updated_date` | 当前全部为 `2019/7/26`，入库规范化为 ISO 日期 |
+
+该来源只解决站点静态参考信息，不提供实时桩状态、经纬度、小时负荷或站点小时指标。正式交付仍须包含 Schema、Manifest、批次血缘和站点关联质量报告。
+
+### 6.3 机器学习数据集
 
 | `dataset_code` | 粒度 | 用途 | 优先级 |
 | --- | --- | --- | --- |
@@ -147,7 +164,7 @@ API 契约：前端可见的稳定 camelCase 字段
 | `load_prediction_actual` | 站点/目标时间 | 预测完成后的实际值回流 | P1 |
 | `model_metric_history` | 模型/评估窗口/指标 | 模型效果和漂移展示 | P1 |
 
-### 6.3 系统元数据集
+### 6.4 系统元数据集
 
 | `dataset_code` | 用途 |
 | --- | --- |
