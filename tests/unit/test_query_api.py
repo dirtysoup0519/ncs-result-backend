@@ -108,3 +108,45 @@ def test_repository_payload_is_serialized_and_preserves_version():
     assert cached.status_code == 304
     assert cached.data == b""
     assert cached.headers["ETag"] == '"overview:batch-1"'
+
+
+def test_query_api_key_protects_business_routes_but_not_health():
+    app = create_app(Settings(query_api_key="frontend-key"), repository=EmptyDashboardRepository())
+    client = app.test_client()
+
+    missing = client.get("/api/v1/meta/capabilities")
+    accepted = client.get("/api/v1/meta/capabilities", headers={"X-API-Key": "frontend-key"})
+    health = client.get("/health/live")
+
+    assert missing.status_code == 401
+    assert missing.json["code"] == "AUTH_INVALID_API_KEY"
+    assert accepted.status_code == 200
+    assert health.status_code == 200
+
+
+def test_query_cors_allows_only_configured_frontend_origin():
+    app = create_app(
+        Settings(query_api_key="key", cors_origins=("http://localhost:5173",)),
+        repository=EmptyDashboardRepository(),
+    )
+    client = app.test_client()
+
+    allowed = client.get(
+        "/api/v1/meta/capabilities",
+        headers={"Origin": "http://localhost:5173", "Authorization": "Bearer key"},
+    )
+    denied = client.get(
+        "/api/v1/meta/capabilities",
+        headers={"Origin": "http://untrusted:5173", "X-API-Key": "key"},
+    )
+    preflight = client.options(
+        "/api/v1/meta/capabilities",
+        headers={"Origin": "http://localhost:5173"},
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+    assert denied.status_code == 403
+    assert denied.json["code"] == "CORS_ORIGIN_DENIED"
+    assert preflight.status_code == 204
+    assert "X-API-Key" in preflight.headers["Access-Control-Allow-Headers"]

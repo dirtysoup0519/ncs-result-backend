@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from collections.abc import Mapping
+from hmac import compare_digest
 from typing import Any
 
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, make_response, request
 
 from ncs_backend.query.repository import DashboardReadRepository, EmptyDashboardRepository, QueryPayload
 from ncs_backend.query.service import DashboardQueryService
@@ -24,6 +25,36 @@ def create_app(
     app.config["NCS_SETTINGS"] = settings or Settings.from_env()
     install_request_context(app)
     app.config["NCS_QUERY_SERVICE"] = DashboardQueryService(repository or EmptyDashboardRepository(), clock=clock)
+
+    @app.before_request
+    def protect_query_api():
+        if not request.path.startswith("/api/v1/"):
+            return None
+        current: Settings = app.config["NCS_SETTINGS"]
+        origin = request.headers.get("Origin")
+        if origin and origin not in current.cors_origins:
+            raise AppError("CORS_ORIGIN_DENIED", "request origin is not allowed", 403)
+        if request.method == "OPTIONS":
+            return make_response("", 204)
+        if current.query_api_key:
+            supplied = request.headers.get("X-API-Key", "")
+            authorization = request.headers.get("Authorization", "")
+            if authorization.startswith("Bearer "):
+                supplied = authorization[7:]
+            if not supplied or not compare_digest(supplied, current.query_api_key):
+                raise AppError("AUTH_INVALID_API_KEY", "a valid query API key is required", 401)
+        return None
+
+    @app.after_request
+    def apply_query_cors(response):
+        current: Settings = app.config["NCS_SETTINGS"]
+        origin = request.headers.get("Origin")
+        if origin and origin in current.cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Key, X-Trace-Id"
+            response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            response.headers.add("Vary", "Origin")
+        return response
 
     def envelope(payload: QueryPayload):
         response = jsonify(

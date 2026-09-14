@@ -5,7 +5,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ncs_backend.bootstrap import configured_query_app
 from ncs_backend.shared.config import Settings
+from ncs_backend.shared.local_config import load_local_config
 
 
 if __name__ == "__main__":
-    configured_query_app(Settings.from_env()).run(host="127.0.0.1", port=5000)
+    load_local_config()
+    settings = Settings.from_env()
+    configured_query_app(settings).run(host=settings.query_host, port=settings.query_port)

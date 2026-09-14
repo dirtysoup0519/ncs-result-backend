@@ -11,6 +11,10 @@ class Settings:
     environment: str = "development"
     log_level: str = "INFO"
     database_url: str | None = None
+    query_host: str = "127.0.0.1"
+    query_port: int = 5000
+    query_api_key: str | None = None
+    cors_origins: tuple[str, ...] = ()
     db_console_host: str = "127.0.0.1"
     db_console_port: int = 5002
     db_console_max_rows: int = 500
@@ -24,6 +28,14 @@ class Settings:
             environment=os.getenv("NCS_ENV", "development"),
             log_level=os.getenv("NCS_LOG_LEVEL", "INFO").upper(),
             database_url=database_url,
+            query_host=os.getenv("NCS_QUERY_HOST", "127.0.0.1"),
+            query_port=int(os.getenv("NCS_QUERY_PORT", "5000")),
+            query_api_key=os.getenv("NCS_QUERY_API_KEY") or None,
+            cors_origins=tuple(
+                item.strip()
+                for item in os.getenv("NCS_CORS_ORIGINS", "").split(",")
+                if item.strip()
+            ),
             db_console_host=os.getenv("NCS_DB_CONSOLE_HOST", "127.0.0.1"),
             db_console_port=int(os.getenv("NCS_DB_CONSOLE_PORT", "5002")),
             db_console_max_rows=int(os.getenv("NCS_DB_CONSOLE_MAX_ROWS", "500")),
