@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 3
+ADS_MIGRATION_VERSION = 4
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -183,6 +183,9 @@ ADS_SCHEMA_SQL = (
         PRIMARY KEY (batch_id, station_id, hour, metric)
     )
     """,
+)
+
+ADS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_rpt_overview_batch ON rpt_dashboard_overview (batch_id)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_platform_batch ON rpt_platform_distribution (batch_id)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_trend_batch_period ON rpt_fee_energy_trend (batch_id, period_start)",
@@ -191,6 +194,17 @@ ADS_SCHEMA_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_rpt_duration_batch ON rpt_duration_distribution (batch_id, lower_minutes)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_profile_batch ON rpt_weekday_weekend (batch_id, day_type, metric_order)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_heatmap_batch ON rpt_station_hour_heatmap (batch_id, station_id, hour, metric)",
+)
+
+ADS_MYSQL_INDEX_SQL = (
+    "CREATE INDEX idx_rpt_overview_batch ON rpt_dashboard_overview (batch_id)",
+    "CREATE INDEX idx_rpt_platform_batch ON rpt_platform_distribution (batch_id)",
+    "CREATE INDEX idx_rpt_trend_batch_period ON rpt_fee_energy_trend (batch_id, period_start)",
+    "CREATE INDEX idx_rpt_ranking_batch_fees ON rpt_station_ranking (batch_id, total_fees)",
+    "CREATE INDEX idx_rpt_process_batch_date ON rpt_process_summary (batch_id, data_date)",
+    "CREATE INDEX idx_rpt_duration_batch ON rpt_duration_distribution (batch_id, lower_minutes)",
+    "CREATE INDEX idx_rpt_profile_batch ON rpt_weekday_weekend (batch_id, day_type, metric_order)",
+    "CREATE INDEX idx_rpt_heatmap_batch ON rpt_station_hour_heatmap (batch_id, station_id, hour, metric)",
 )
 
 ADS_VIEW_SQL = (
@@ -302,6 +316,14 @@ ADS_VIEW_SQL = (
 
 ADS_SCHEMA_STATEMENTS = (
     *ADS_SCHEMA_SQL,
+    *ADS_INDEX_SQL,
+    *(f"DROP VIEW IF EXISTS {view_name}" for view_name in ADS_VIEW_NAMES),
+    *ADS_VIEW_SQL,
+)
+
+ADS_MYSQL_SCHEMA_STATEMENTS = (
+    *ADS_SCHEMA_SQL,
+    *ADS_MYSQL_INDEX_SQL,
     *(f"DROP VIEW IF EXISTS {view_name}" for view_name in ADS_VIEW_NAMES),
     *ADS_VIEW_SQL,
 )
@@ -322,11 +344,13 @@ def initialize_ads_result_schema(
     connection: Any,
     *,
     dialect: DatabaseDialect = SQLITE_DIALECT,
-    schema_sql: Iterable[str] = ADS_SCHEMA_STATEMENTS,
+    schema_sql: Iterable[str] | None = None,
 ) -> AdsSchemaResult:
     """Create A0 tables/views atomically and record a checksummed schema version."""
 
-    statements = tuple(schema_sql)
+    statements = tuple(schema_sql) if schema_sql is not None else (
+        ADS_MYSQL_SCHEMA_STATEMENTS if dialect.name == "mysql" else ADS_SCHEMA_STATEMENTS
+    )
     checksum = hashlib.sha256("\n".join(item.strip() for item in statements).encode("utf-8")).hexdigest()
     cursor = dialect.cursor(connection)
     try:
@@ -341,7 +365,11 @@ def initialize_ads_result_schema(
             raise AdsSchemaMigrationError("ADS schema checksum mismatch")
         if not rows:
             for statement in statements:
-                cursor.execute(statement)
+                try:
+                    cursor.execute(statement)
+                except Exception as exc:
+                    if not _is_mysql_duplicate_index(exc, statement, dialect):
+                        raise
             cursor.execute(
                 f"INSERT INTO {ADS_MIGRATION_TABLE} (version, checksum, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
                 (ADS_MIGRATION_VERSION, checksum),
@@ -356,3 +384,12 @@ def initialize_ads_result_schema(
     finally:
         cursor.close()
     return AdsSchemaResult(applied, ADS_RESULT_TABLES, ADS_VIEW_NAMES)
+
+
+def _is_mysql_duplicate_index(error: Exception, statement: str, dialect: DatabaseDialect) -> bool:
+    """Allow a retry after MySQL committed an index before a later DDL error."""
+
+    if dialect.name != "mysql" or not statement.lstrip().upper().startswith("CREATE INDEX"):
+        return False
+    args = getattr(error, "args", ())
+    return bool(args) and args[0] == 1061
