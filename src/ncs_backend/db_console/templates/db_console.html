@@ -17,12 +17,32 @@
         <button type="button" id="refresh-status">刷新</button>
       </div>
     </header>
+    <section class="panel schema-panel">
+      <div class="panel-heading"><h1>结构</h1><button type="button" id="refresh-schema">刷新</button></div>
+      <div class="toolbar"><select id="schema-table"><option value="">选择表…</option></select><span id="schema-meta"></span></div>
+      <div class="table-wrap" style="max-height:180px;overflow:auto"><table id="schema-columns"><tbody><tr><td class="empty">选择表后显示列信息</td></tr></tbody></table></div>
+      <div class="table-wrap" style="max-height:220px;overflow:auto"><table id="schema-rows"><tbody><tr><td class="empty">表数据预览</td></tr></tbody></table></div>
+      <div class="toolbar">
+        <button type="button" id="prev-page">上一页</button>
+        <button type="button" id="next-page">下一页</button>
+        <button type="button" id="truncate-table" class="danger">清空表</button>
+        <button type="button" id="drop-table" class="danger">删除表</button>
+      </div>
+    </section>
     <section class="panel sql-panel">
       <div class="panel-heading"><h1>SQL</h1><span id="sql-meta">等待执行</span></div>
       <textarea id="sql-input" spellcheck="false">SELECT * FROM ctl_dataset LIMIT 20;</textarea>
       <div class="toolbar"><button type="button" id="run-sql" class="primary">执行 SQL</button><button type="button" id="clear-sql">清空</button><span>Ctrl+Enter 执行</span></div>
       <div id="sql-error" class="error" hidden></div>
       <div class="table-wrap"><table id="result-table"><tbody><tr><td class="empty">执行查询后显示结果</td></tr></tbody></table></div>
+    </section>
+    <section class="panel script-panel">
+      <div class="panel-heading"><h1>事务脚本</h1><span id="script-meta">全部语句同一事务，失败整体回滚</span></div>
+      <textarea id="script-input" spellcheck="false" placeholder="每行一条 SQL 语句，例如：
+DELETE FROM ctl_import_batch WHERE batch_status = 'FAILED';
+UPDATE ctl_dataset SET description = 'legacy' WHERE dataset_code = 'old';"></textarea>
+      <div class="toolbar"><button type="button" id="run-script" class="primary">执行脚本</button><span>Ctrl+Shift+Enter 执行</span></div>
+      <div id="script-error" class="error" hidden></div>
     </section>
     <section class="panel log-panel">
       <div class="panel-heading"><h1>操作日志</h1><label><input type="checkbox" id="auto-refresh" checked> 自动刷新</label></div>
@@ -69,7 +89,52 @@
       catch (_) { /* status endpoint still shows connection problems */ }
     }
     $('run-sql').addEventListener('click', runSql); $('clear-sql').addEventListener('click', () => { $('sql-input').value = ''; $('result-table').innerHTML = '<tbody><tr><td class="empty">执行查询后显示结果</td></tr></tbody>'; }); $('refresh-status').addEventListener('click', refreshStatus); $('sql-input').addEventListener('keydown', (event) => { if (event.ctrlKey && event.key === 'Enter') runSql(); }); document.querySelectorAll('[data-runtime]').forEach((button) => button.addEventListener('click', async () => { if (!confirm(`确认${button.textContent}数据库？`)) return; button.disabled = true; try { await request('/internal/db-console/runtime', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ action: button.dataset.runtime }) }); await refreshStatus(); await refreshLogs(); } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; } }));
-    refreshStatus(); refreshLogs(); setInterval(() => { if ($('auto-refresh').checked) refreshLogs(); }, 2000);
+    async function refreshSchema() {
+      try {
+        const data = await request('/internal/db-console/schema');
+        const select = $('schema-table'); select.replaceChildren();
+        const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = `选择表…（共 ${data.items.length} 个）`; select.appendChild(placeholder);
+        data.items.forEach((item) => { const option = document.createElement('option'); option.value = item.name; option.textContent = `${item.kind === 'view' ? '视图' : '表'} ${item.name}（${item.rowCount ?? '?'} 行 / ${item.columnCount} 列）`; select.appendChild(option); });
+        $('schema-meta').textContent = '';
+      } catch (error) { $('schema-meta').textContent = error.message; }
+    }
+    function renderSimpleTable(container, columns, rows) {
+      const table = $(container); table.replaceChildren();
+      if (!columns.length) { table.innerHTML = '<tbody><tr><td class="empty">无数据</td></tr></tbody>'; return; }
+      const thead = document.createElement('thead'); const head = document.createElement('tr');
+      columns.forEach((column) => { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = column; head.appendChild(cell); }); thead.appendChild(head);
+      const tbody = document.createElement('tbody');
+      rows.forEach((row) => { const tr = document.createElement('tr'); row.forEach((value) => { const td = document.createElement('td'); td.textContent = value == null ? 'NULL' : String(value); tr.appendChild(td); }); tbody.appendChild(tr); });
+      table.append(thead, tbody);
+    }
+    let schemaPage = 0; const SCHEMA_PAGE_SIZE = 50;
+    async function loadTable(name, page = 0) {
+      try {
+        const detail = await request(`/internal/db-console/schema/tables/${encodeURIComponent(name)}`);
+        $('schema-meta').textContent = `${detail.table}：${detail.rowCount} 行`;
+        renderSimpleTable('schema-columns', ['列', '类型', '可空', '默认值', '键'], detail.columns.map((column) => [column.name, column.dataType, column.nullable ? '是' : '否', column.default ?? '', column.key ?? '']));
+        const rows = await request(`/internal/db-console/tables/${encodeURIComponent(name)}/rows?limit=${SCHEMA_PAGE_SIZE}&offset=${page * SCHEMA_PAGE_SIZE}`);
+        schemaPage = page; renderSimpleTable('schema-rows', rows.columns, rows.rows);
+        $('sql-error').hidden = true;
+      } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; }
+    }
+    async function runScript() {
+      const statements = $('script-input').value.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('--'));
+      if (!statements.length) return;
+      $('run-script').disabled = true; $('script-meta').textContent = '执行中…'; $('script-error').hidden = true;
+      try { const data = await request('/internal/db-console/script', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ statements }) }); $('script-meta').textContent = `${data.statements.length} 条语句已提交（${data.durationMs}ms）`; await refreshSchema(); await refreshLogs(); }
+      catch (error) { $('script-error').textContent = error.message; $('script-error').hidden = false; $('script-meta').textContent = '已回滚，数据未变化'; }
+      finally { $('run-script').disabled = false; }
+    }
+    $('refresh-schema').addEventListener('click', refreshSchema);
+    $('schema-table').addEventListener('change', (event) => { if (event.target.value) loadTable(event.target.value, 0); });
+    $('prev-page').addEventListener('click', () => { const name = $('schema-table').value; if (name && schemaPage > 0) loadTable(name, schemaPage - 1); });
+    $('next-page').addEventListener('click', () => { const name = $('schema-table').value; if (name) loadTable(name, schemaPage + 1); });
+    $('truncate-table').addEventListener('click', async () => { const name = $('schema-table').value; if (!name) return; if (!confirm(`确认清空表 ${name} 的全部数据？此操作不可回滚。`)) return; if (!confirm('再次确认：清空操作立即生效。')) return; try { await request(`/internal/db-console/tables/${encodeURIComponent(name)}/truncate`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ confirm: true }) }); await loadTable(name, 0); await refreshSchema(); await refreshLogs(); } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; } });
+    $('drop-table').addEventListener('click', async () => { const name = $('schema-table').value; if (!name) return; if (!confirm(`确认删除表 ${name}（含全部数据与结构）？`)) return; if (!confirm('再次确认：删除后需要重新迁移才能恢复。')) return; try { await request(`/internal/db-console/tables/${encodeURIComponent(name)}/drop`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ confirm: true }) }); await refreshSchema(); await refreshLogs(); } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; } });
+    $('run-script').addEventListener('click', runScript);
+    $('script-input').addEventListener('keydown', (event) => { if (event.ctrlKey && event.shiftKey && event.key === 'Enter') runScript(); });
+    refreshStatus(); refreshLogs(); refreshSchema(); setInterval(() => { if ($('auto-refresh').checked) refreshLogs(); }, 2000);
   </script>
 </body>
 </html>
