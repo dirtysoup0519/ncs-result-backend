@@ -94,6 +94,14 @@ python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
 
 连接地址分别通过 `NCS_MYSQL_MIGRATOR_URL`、`NCS_MYSQL_PRIVILEGED_URL`、`NCS_MYSQL_ADMIN_URL`、`NCS_MYSQL_READER_URL` 提供。命令不会输出连接串；特权连接只在授予固定视图权限时需要。
 
+配置迁移、管理、查询三账号 URL 和 ADS 包目录后，可运行完整验收：
+
+```powershell
+python scripts/verify_mysql_e2e.py
+```
+
+该命令会执行幂等迁移、两次 ADS 导入、权限检查、必需视图合同、12 个查询请求和无残留事务回滚探针，仅用于测试/联调数据库。
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`

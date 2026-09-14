@@ -33,6 +33,15 @@ python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
 
 `--grant-reader` 仅向固定 `api_v1_*` 视图授予 `SELECT`，不创建账号、不修改密码。`--verify` 检查迁移账号具备 DDL、管理账号仅具备 DML、查询账号能读取全部必需视图且不能读取物理结果表和控制表。
 
+完整端到端验收入口：
+
+```powershell
+$env:NCS_ADS_V21_PACKAGE = "<extracted-package-directory>"
+python scripts/verify_mysql_e2e.py
+```
+
+复用上述迁移、管理、查询账号环境变量。脚本要求三个 URL 指向同一数据库，并执行两次幂等导入、必需视图合同、12 个非模型查询请求和事务回滚探针。回滚探针使用唯一临时批次，预期不留下控制记录或结果行；只应对测试/联调数据库运行。
+
 不带 `--initialize` 时只检查服务器元信息和 `api_v1_*` 视图合同；带 `--initialize` 才会执行控制表、结果表和视图迁移。脚本不会执行上游联调包中的 `TRUNCATE` 或 `LOAD DATA` SQL。
 
 ## 权限边界
