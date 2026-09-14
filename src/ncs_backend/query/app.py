@@ -16,6 +16,11 @@ from ncs_backend.shared.errors import AppError
 from ncs_backend.shared.observability import install_request_context
 
 
+# ETags identify the serialized API representation, not only the ADS data.
+# Increment this revision whenever a response DTO changes without a data reload.
+QUERY_REPRESENTATION_REVISION = "api-v1-r2"
+
+
 def create_app(
     settings: Settings | None = None,
     repository: DashboardReadRepository | None = None,
@@ -74,8 +79,9 @@ def create_app(
             }
         )
         if payload.data_version:
-            etag = f'"{payload.data_version}"'
+            etag = f'"{payload.data_version}:{QUERY_REPRESENTATION_REVISION}"'
             response.headers["ETag"] = etag
+            response.headers["Cache-Control"] = "no-cache"
             if request.headers.get("If-None-Match") == etag:
                 response.status_code = 304
                 response.set_data(b"")

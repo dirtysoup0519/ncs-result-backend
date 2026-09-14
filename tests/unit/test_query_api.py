@@ -103,11 +103,18 @@ def test_repository_payload_is_serialized_and_preserves_version():
 
     cached = _app(repository).test_client().get(
         "/api/v1/dashboard/overview",
-        headers={"If-None-Match": '"overview:batch-1"'},
+        headers={"If-None-Match": '"overview:batch-1:api-v1-r2"'},
     )
     assert cached.status_code == 304
     assert cached.data == b""
-    assert cached.headers["ETag"] == '"overview:batch-1"'
+    assert cached.headers["ETag"] == '"overview:batch-1:api-v1-r2"'
+    assert cached.headers["Cache-Control"] == "no-cache"
+
+    stale_contract = _app(repository).test_client().get(
+        "/api/v1/dashboard/overview",
+        headers={"If-None-Match": '"overview:batch-1"'},
+    )
+    assert stale_contract.status_code == 200
 
 
 def test_query_api_key_protects_business_routes_but_not_health():
