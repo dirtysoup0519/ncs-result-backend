@@ -8,6 +8,8 @@ import sqlite3
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from ncs_backend.shared.db import DatabaseDialect, MYSQL_DIALECT, SQLITE_DIALECT
+
 ConnectionFactory = Callable[[], Any]
 
 
@@ -44,6 +46,15 @@ def connection_factory_from_url(database_url: str) -> ConnectionFactory:
 
         return connect_mysql
 
+    raise ValueError("supported database URLs are sqlite:/// and mysql+pymysql://")
+
+
+def database_dialect_from_url(database_url: str) -> DatabaseDialect:
+    parsed = urlsplit(database_url.strip())
+    if parsed.scheme == "sqlite":
+        return SQLITE_DIALECT
+    if parsed.scheme in {"mysql", "mysql+pymysql"}:
+        return MYSQL_DIALECT
     raise ValueError("supported database URLs are sqlite:/// and mysql+pymysql://")
 
 
