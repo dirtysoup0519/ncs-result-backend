@@ -15,6 +15,8 @@ from ncs_backend.admin.services import (
     PublicationService,
     QualityService,
 )
+from ncs_backend.admin.adapters.ads_v21_import import AdsV21ImportError
+from ncs_backend.admin.adapters.ads_v21_package import AdsV21PackageError
 from ncs_backend.shared.contracts.manifest import DatasetManifest
 from ncs_backend.shared.contracts.schema import DatasetSchema
 from ncs_backend.shared.domain.enums import BatchStatus
@@ -31,6 +33,7 @@ def create_app(
     batch_service: BatchService | None = None,
     quality_service: QualityService | None = None,
     publication_service: PublicationService | None = None,
+    ads_v21_import_service: Any | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["NCS_SETTINGS"] = settings or Settings.from_env()
@@ -39,6 +42,7 @@ def create_app(
         "batch": batch_service,
         "quality": quality_service,
         "publication": publication_service,
+        "ads_v21_import": ads_v21_import_service,
     }
     install_request_context(app)
 
@@ -75,7 +79,7 @@ def create_app(
         current: Settings = app.config["NCS_SETTINGS"]
         if not current.database_configured:
             return jsonify({"code": "DEPENDENCY_NOT_READY", "message": "database is not configured"}), 503
-        if any(value is None for value in services().values()):
+        if any(services().get(name) is None for name in ("registry", "batch", "quality", "publication")):
             return jsonify({"code": "DEPENDENCY_NOT_READY", "message": "admin service dependencies are not configured"}), 503
         return jsonify({"code": "OK", "message": "ok", "data": {"status": "ready"}})
 
@@ -132,6 +136,22 @@ def create_app(
             raise AppError("VALIDATION_INVALID_PARAMETER", str(exc), 400) from exc
         batch = require("batch").create_batch(manifest, source_batch_id=source_batch_id, batch_id=batch_id)
         return success(batch, 201)
+
+    @app.post("/internal/v1/ads-v21/imports")
+    def import_ads_v21_package():
+        payload = body()
+        package_path = payload.get("packagePath")
+        waves = payload.get("waves", ["A0", "B"])
+        if not isinstance(package_path, str) or not package_path.strip():
+            raise AppError("VALIDATION_INVALID_PARAMETER", "packagePath is required", 400, {"field": "packagePath"})
+        if not isinstance(waves, list):
+            raise AppError("VALIDATION_INVALID_PARAMETER", "waves must be an array", 400, {"field": "waves"})
+        requested_by = actor(payload)
+        try:
+            result = require("ads_v21_import").import_package(package_path.strip(), waves)
+        except (AdsV21PackageError, AdsV21ImportError, ValueError) as exc:
+            raise AppError("ADS_V21_IMPORT_REJECTED", str(exc), 400) from exc
+        return success({"import": result, "actor": requested_by}, 201)
 
     @app.get("/internal/v1/import-jobs/<batch_id>")
     def get_import_job(batch_id: str):

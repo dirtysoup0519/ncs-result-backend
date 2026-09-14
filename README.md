@@ -84,6 +84,8 @@ python scripts/run_local.py console
 
 管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记/列表、Schema 列表、批次创建/查询/筛选、质量完成与筛选查询、发布历史/详情、当前活动发布、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
 
+ADS v2.1 已提供同步管理入口 `POST /internal/v1/ads-v21/imports`。它接收服务器本地解压目录并选择 `A0`/`B` 波次；迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`

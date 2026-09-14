@@ -384,6 +384,7 @@ V1 允许前端根据已确认的高峰时段、Top1 站点等字段套用固定
 | 等级 | 方法与路径 | 抽象行为 |
 | --- | --- | --- |
 | P0 | `POST /internal/v1/import-jobs` | 根据 manifest 创建幂等导入任务 |
+| P0 | `POST /internal/v1/ads-v21/imports` | 同步校验并导入服务器本地 ADS v2.1 解压包；可选择 `A0`、`B` 波次 |
 | P0 | `GET /internal/v1/import-jobs` | 按数据集、日期、状态查询任务 |
 | P0 | `GET /internal/v1/import-jobs/{jobId}` | 查询阶段、进度、计数和错误摘要 |
 | P0 | `POST /internal/v1/import-jobs/{jobId}/start` | 启动已创建任务 |
@@ -393,6 +394,8 @@ V1 允许前端根据已确认的高峰时段、Top1 站点等字段套用固定
 | P0 | `POST /internal/v1/import-jobs/{jobId}/publish` | 发布已通过校验的任务 |
 | P1 | `GET /internal/v1/import-jobs/{jobId}/manifest` | 返回脱敏 manifest |
 | P1 | `GET /internal/v1/import-jobs/{jobId}/quality-results` | 查询本批质量结果 |
+
+`POST /internal/v1/ads-v21/imports` 请求必须包含 `packagePath`、`actor`，可选 `waves`，默认导入 `A0` 和 `B`。数据库结构必须先由迁移账号初始化；该接口使用管理账号，仅执行包校验和 DML 导入，不执行 DDL。
 
 ### 8.3 发布与回滚
 

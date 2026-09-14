@@ -31,6 +31,17 @@ def _client(tmp_path):
     return app.test_client(), repository
 
 
+class _FakeAdsImportService:
+    def __init__(self):
+        self.calls = []
+
+    def import_package(self, package_path, waves):
+        from ncs_backend.admin.ads_import_service import AdsV21ImportResult
+
+        self.calls.append((package_path, waves))
+        return AdsV21ImportResult("ads-batch", "v2.1", tuple(waves), ("dashboard_overview",))
+
+
 def _schema_payload():
     return json.loads((EXAMPLES / "station-hourly.schema.v1.json").read_text("utf-8"))
 
@@ -132,3 +143,34 @@ def test_admin_api_returns_json_for_unknown_route(tmp_path):
 
     assert response.status_code == 404
     assert response.get_json()["code"] == "ADMIN_ROUTE_NOT_FOUND"
+
+
+def test_admin_api_imports_selected_ads_v21_waves(tmp_path):
+    service = _FakeAdsImportService()
+    app = create_app(
+        Settings(database_url="sqlite:///admin-api.sqlite"),
+        ads_v21_import_service=service,
+    )
+
+    response = app.test_client().post(
+        "/internal/v1/ads-v21/imports",
+        json={"packagePath": "C:/delivery/ads-v21", "waves": ["A0"], "actor": "student"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["data"]["import"]["source_batch_id"] == "ads-batch"
+    assert response.get_json()["data"]["actor"] == "student"
+    assert service.calls == [("C:/delivery/ads-v21", ["A0"])]
+
+
+def test_admin_api_rejects_invalid_ads_v21_request():
+    client = create_app(Settings(), ads_v21_import_service=_FakeAdsImportService()).test_client()
+
+    missing_path = client.post("/internal/v1/ads-v21/imports", json={"actor": "student"})
+    invalid_waves = client.post(
+        "/internal/v1/ads-v21/imports",
+        json={"packagePath": "C:/delivery", "waves": "A0", "actor": "student"},
+    )
+
+    assert missing_path.status_code == 400
+    assert invalid_waves.status_code == 400

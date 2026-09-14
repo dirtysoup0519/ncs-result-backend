@@ -8,6 +8,7 @@ from typing import Any, Callable
 from flask import Flask
 
 from ncs_backend.admin.app import create_app as create_admin_app
+from ncs_backend.admin.ads_import_service import AdsV21ImportService
 from ncs_backend.admin.repositories import DbApiControlRepository
 from ncs_backend.admin.services import BatchService, DatasetRegistryService, PublicationService, QualityService
 from ncs_backend.db_console.app import create_app as create_db_console_app
@@ -42,6 +43,10 @@ def configured_admin_app(settings: Settings) -> Flask:
         batch_service=BatchService(repository),
         quality_service=QualityService(repository),
         publication_service=PublicationService(repository),
+        ads_v21_import_service=AdsV21ImportService(
+            database.connection_factory,
+            dialect=database.dialect,
+        ),
     )
 
 
