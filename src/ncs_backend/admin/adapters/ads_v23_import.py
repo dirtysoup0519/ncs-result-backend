@@ -61,6 +61,7 @@ class AdsV23Importer:
         package_hash = _package_hash(package)
         published: list[str] = []
         try:
+            self._assert_v23_schema(cursor)
             for code in self.DATASETS:
                 descriptor = next(item for item in package.datasets if item.dataset_code == code)
                 batch_id = _batch_id(package.source_batch_id, code)
@@ -90,6 +91,17 @@ class AdsV23Importer:
         finally:
             cursor.close()
             connection.close()
+
+    @staticmethod
+    def _assert_v23_schema(cursor) -> None:
+        required = ("rpt_station_daily", "rpt_station_reference", "rpt_station_hour_daily", "rpt_load_hourly")
+        try:
+            for table in required:
+                cursor.execute(f"SELECT 1 FROM {table} LIMIT 0")
+        except Exception as exc:
+            raise AdsV23ImportError(
+                "ADS v2.3 result schema is not initialized; run scripts/setup_mysql_ads.py --initialize with the migrator account"
+            ) from exc
 
     @staticmethod
     def _check_consistency(rows: dict[str, tuple[dict[str, str], ...]]) -> None:
