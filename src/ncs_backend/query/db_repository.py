@@ -428,14 +428,17 @@ class DbApiDashboardRepository:
         actual = []
         forecast = []
         cutoff = params.get("cutoffHour")
+        requested_date = _date_value(params.get("date"))
         for row in rows:
             target_time = _business_datetime_value(row.get("target_time"))
+            if target_time is None or target_time.date() != requested_date:
+                continue
             if row.get("series_type") == "ACTUAL":
-                if target_time is not None and target_time.hour >= cutoff:
+                if target_time.hour >= cutoff:
                     continue
                 actual.append(
                     {
-                        "time": _datetime_text(target_time),
+                        "hour": target_time.hour,
                         "orderCount": _integer(row.get("order_count")),
                         "chargingEnergy": _decimal_text(row.get("charging_energy")),
                         "isObserved": True,
@@ -444,19 +447,20 @@ class DbApiDashboardRepository:
             else:
                 forecast.append(
                     {
-                        "time": _datetime_text(target_time),
-                        "chargingEnergy": _decimal_text(row.get("charging_energy")),
+                        "hour": target_time.hour,
+                        "predictedEnergy": _decimal_text(row.get("charging_energy")),
                         "lowerBound": _decimal_text(row.get("lower_bound")),
                         "upperBound": _decimal_text(row.get("upper_bound")),
                     }
                 )
         first = rows[0] if rows else {}
         interval_available = _bool(first.get("interval_available")) if rows else False
+        available = bool(rows)
         data = {
-            "availability": "AVAILABLE" if rows else "UNAVAILABLE",
-            "date": _date_text(params.get("date")),
-            "cutoffHour": cutoff,
-            "forecastStartAt": _business_datetime_text(first.get("forecast_start_at")),
+            "availability": "AVAILABLE" if available else "UNAVAILABLE",
+            "date": _date_text(params.get("date")) if available else None,
+            "cutoffHour": cutoff if available else None,
+            "forecastStartAt": _business_datetime_text(first.get("forecast_start_at")) if available else None,
             "energyUnit": "kWh",
             "orderCountUnit": "count",
             "actual": actual,
@@ -465,9 +469,9 @@ class DbApiDashboardRepository:
                 "available": interval_available,
                 "confidenceLevel": _decimal_text(first.get("confidence_level")) if interval_available else None,
             },
-            "modelVersion": first.get("model_version"),
-            "predictionRunId": first.get("prediction_run_id"),
-            "generatedAt": _datetime_text(first.get("generated_at")),
+            "modelVersion": first.get("model_version") if available else None,
+            "predictionRunId": first.get("prediction_run_id") if available else None,
+            "generatedAt": _datetime_text(first.get("generated_at")) if available else None,
         }
         return self._payload(data, rows)
 
