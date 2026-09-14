@@ -101,13 +101,14 @@ def test_repository_payload_is_serialized_and_preserves_version():
     assert response.json["meta"]["dataVersion"] == "overview:batch-1"
     assert response.json["meta"]["staleness"] == "FRESH"
 
+    etag = response.headers["ETag"]
     cached = _app(repository).test_client().get(
         "/api/v1/dashboard/overview",
-        headers={"If-None-Match": '"overview:batch-1:api-v1-r2"'},
+        headers={"If-None-Match": etag},
     )
     assert cached.status_code == 304
     assert cached.data == b""
-    assert cached.headers["ETag"] == '"overview:batch-1:api-v1-r2"'
+    assert cached.headers["ETag"] == etag
     assert cached.headers["Cache-Control"] == "no-cache"
 
     stale_contract = _app(repository).test_client().get(
@@ -115,6 +116,34 @@ def test_repository_payload_is_serialized_and_preserves_version():
         headers={"If-None-Match": '"overview:batch-1"'},
     )
     assert stale_contract.status_code == 200
+
+
+def test_etag_changes_when_payload_changes_without_data_version_change():
+    repository = EmptyDashboardRepository(
+        _resources={
+            "overview": QueryPayload(
+                data={"items": [{"metricCode": "total_order_count", "value": "299"}]},
+                data_version="2.0.0",
+                empty=False,
+            )
+        }
+    )
+    client = _app(repository).test_client()
+    first = client.get("/api/v1/dashboard/overview")
+
+    repository._resources["overview"] = QueryPayload(
+        data={"items": [{"metricCode": "total_order_count", "value": "5000"}]},
+        data_version="2.0.0",
+        empty=False,
+    )
+    changed = client.get(
+        "/api/v1/dashboard/overview",
+        headers={"If-None-Match": first.headers["ETag"]},
+    )
+
+    assert changed.status_code == 200
+    assert changed.json["data"]["items"][0]["value"] == "5000"
+    assert changed.headers["ETag"] != first.headers["ETag"]
 
 
 def test_query_api_key_protects_business_routes_but_not_health():

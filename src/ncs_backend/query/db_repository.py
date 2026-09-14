@@ -381,6 +381,23 @@ class DbApiDashboardRepository:
         methods = {row.get("normalization_method") for row in rows if row.get("normalization_method")}
         versions = {row.get("normalization_version") for row in rows if row.get("normalization_version")}
         normalization = {"method": next(iter(methods)), "version": next(iter(versions))} if methods and versions else None
+        if normalization is None and all(
+            value is not None
+            for item in series
+            for value in item["rawValues"]
+        ):
+            maxima = [
+                max(Decimal(str(item["rawValues"][index])) for item in series)
+                for index in range(len(indicators))
+            ]
+            for index, maximum in enumerate(maxima):
+                indicators[index]["max"] = _metric_value(maximum, indicators[index]["unit"])
+            for item in series:
+                item["normalizedValues"] = [
+                    _decimal_text(Decimal(str(value)) / maximum) if maximum > 0 else "0"
+                    for value, maximum in zip(item["rawValues"], maxima)
+                ]
+            normalization = {"method": "PAIR_MAX", "version": "1.0"}
         return self._payload({"indicators": indicators, "series": series, "normalization": normalization}, rows)
 
     def _fetch_prediction(self, params: Mapping[str, Any]) -> QueryPayload:

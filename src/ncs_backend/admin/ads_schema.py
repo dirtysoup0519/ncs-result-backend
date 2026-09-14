@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 11
+ADS_MIGRATION_VERSION = 12
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -370,8 +370,21 @@ ADS_VIEW_SQL = (
            r.average_voltage, r.average_max_temperature, r.data_date,
            r.data_version, r.generated_at, r.staleness
     FROM rpt_process_summary r
-    JOIN ctl_publication p ON p.dataset_code IN ('charging_process_daily', 'process_daily')
+    JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.scope_type, NULLIF(r.station_id, '') AS station_id,
+           MIN(r.start_date) AS start_date, MAX(r.end_date) AS end_date,
+           SUM(r.record_count) AS record_count, SUM(r.session_count) AS session_count,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_soc * r.record_count) / SUM(r.record_count) END AS average_soc,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_current * r.record_count) / SUM(r.record_count) END AS average_current,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_voltage * r.record_count) / SUM(r.record_count) END AS average_voltage,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_max_temperature * r.record_count) / SUM(r.record_count) END AS average_max_temperature,
+           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at, r.staleness
+    FROM rpt_process_summary r
+    JOIN ctl_publication p ON p.dataset_code = 'process_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    GROUP BY r.batch_id, r.scope_type, r.station_id, r.data_version, r.staleness
     """,
     """
     CREATE VIEW IF NOT EXISTS api_v1_duration_distribution AS
@@ -528,8 +541,21 @@ ADS_MYSQL_VIEW_SQL = (
            r.average_voltage, r.average_max_temperature, r.data_date,
            r.data_version, r.generated_at, r.staleness
     FROM rpt_process_summary r
-    JOIN ctl_publication p ON p.dataset_code IN ('charging_process_daily', 'process_daily')
+    JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.scope_type, NULLIF(r.station_id, '') AS station_id,
+           MIN(r.start_date) AS start_date, MAX(r.end_date) AS end_date,
+           SUM(r.record_count) AS record_count, SUM(r.session_count) AS session_count,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_soc * r.record_count) / SUM(r.record_count) END AS average_soc,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_current * r.record_count) / SUM(r.record_count) END AS average_current,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_voltage * r.record_count) / SUM(r.record_count) END AS average_voltage,
+           CASE WHEN SUM(r.record_count) = 0 THEN NULL ELSE SUM(r.average_max_temperature * r.record_count) / SUM(r.record_count) END AS average_max_temperature,
+           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at, r.staleness
+    FROM rpt_process_summary r
+    JOIN ctl_publication p ON p.dataset_code = 'process_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    GROUP BY r.batch_id, r.scope_type, r.station_id, r.data_version, r.staleness
     """,
     """
     CREATE VIEW api_v1_duration_distribution AS
