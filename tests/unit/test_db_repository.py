@@ -41,6 +41,14 @@ def _repository(tmp_path):
         INSERT INTO api_v1_weekday_weekend VALUES
           ('WEEKDAY', 'order_count', '订单量', 'count', 1, NULL, '10', NULL, NULL, NULL, '2019-09-01', '2019-09-13', 'profile:b1', '2026-09-13T06:00:00+08:00', 'FRESH'),
           ('WEEKEND', 'order_count', '订单量', 'count', 1, NULL, '4', NULL, NULL, NULL, '2019-09-01', '2019-09-13', 'profile:b1', '2026-09-13T06:00:00+08:00', 'FRESH');
+        CREATE TABLE api_v1_fee_energy_trend (
+            granularity TEXT, period TEXT, period_start TEXT, order_count INTEGER,
+            total_fees TEXT, total_kwh TEXT, data_date TEXT, data_version TEXT,
+            generated_at TEXT, staleness TEXT
+        );
+        INSERT INTO api_v1_fee_energy_trend VALUES
+          ('DAY', '2019-09-12', '2019-09-12', 2, '3.00', '4.00', '2019-09-12', 'trend:b1', '2026-09-13T06:00:00+08:00', 'FRESH'),
+          ('DAY', '2019-09-13', '2019-09-13', 5, '6.00', '7.00', '2019-09-13', 'trend:b1', '2026-09-13T06:00:00+08:00', 'FRESH');
         CREATE TABLE api_v1_load_prediction (
             series_type TEXT, target_time TEXT, order_count INTEGER, charging_energy TEXT,
             lower_bound TEXT, upper_bound TEXT, prediction_date TEXT, cutoff_hour INTEGER,
@@ -107,6 +115,7 @@ def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
     profile = repository.fetch("weekday_weekend", {})
     assert profile.data["series"][0]["rawValues"] == [10]
     assert profile.data["series"][1]["rawValues"] == [4]
+    assert profile.data_date.isoformat() == "2019-09-13"
 
     prediction = repository.fetch("prediction", {"date": "2019-09-13", "cutoffHour": 16})
     assert len(prediction.data["actual"]) == 1
@@ -135,3 +144,10 @@ def test_daily_trend_rows_can_be_aggregated_for_month_view():
         ("2026-08", 2, "3.10"),
         ("2026-09", 12, "14.80"),
     ]
+
+
+def test_trend_envelope_uses_latest_date_while_points_remain_chronological(tmp_path):
+    result = _repository(tmp_path).fetch("fee_energy_trend", {"granularity": "DAY"})
+
+    assert [point["period"] for point in result.data["points"]] == ["2019-09-12", "2019-09-13"]
+    assert result.data_date.isoformat() == "2019-09-13"

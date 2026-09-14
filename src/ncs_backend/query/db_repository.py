@@ -333,7 +333,8 @@ class DbApiDashboardRepository:
             f"""
             SELECT day_type, metric_key, label, unit, metric_order, max_value,
                    raw_value, normalized_value, normalization_method,
-                   normalization_version, start_date, end_date, data_version,
+                   normalization_version, start_date, end_date,
+                   end_date AS data_date, data_version,
                    generated_at, staleness
             FROM api_v1_weekday_weekend
             WHERE {' AND '.join(where)}
@@ -485,7 +486,13 @@ class DbApiDashboardRepository:
             }
             for row in rows
         ]
-        return self._payload({"granularity": granularity, "points": points, "units": {"fees": "CNY", "energy": "kWh", "orders": "count"}}, rows)
+        # Points stay chronological, while envelope metadata describes the
+        # newest source record represented by the complete series.
+        metadata_rows = rows[-1:] if rows else rows
+        return self._payload(
+            {"granularity": granularity, "points": points, "units": {"fees": "CNY", "energy": "kWh", "orders": "count"}},
+            metadata_rows,
+        )
 
     def _fetch_process_summary(self, params: Mapping[str, Any]) -> QueryPayload:
         where, values = _range_filter("data_date", params, "api_v1_process_summary", include_station=True)
