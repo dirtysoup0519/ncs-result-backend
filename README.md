@@ -49,7 +49,23 @@ python scripts/admin_cli.py init-control-schema --sqlite .local/control.sqlite
 python scripts/admin_cli.py init-staging-schema --sqlite .local/control.sqlite
 ```
 
-该命令只创建控制表，支持重复执行；真实 MySQL 迁移和生产凭据接入仍需单独配置。
+推荐使用统一命令创建完整的本地开发库：
+
+```powershell
+python scripts/init_local_database.py --sqlite .local/ncs.sqlite
+python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
+```
+
+统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发，不是正式结果库；真实 MySQL 迁移和生产凭据接入仍需单独配置。
+
+数据库窗口连接该开发库时，在当前终端设置连接地址后启动：
+
+```powershell
+$env:NCS_DATABASE_URL = "sqlite:///.local/ncs.sqlite"
+python scripts/run_db_console.py
+```
+
+打开 `http://127.0.0.1:5002/db-console`。默认 `unmanaged` 模式只检查连接，不提供数据库进程启停。
 
 控制面当前已提供批次生命周期、质量校验、发布和显式回滚用例的本地 DB-API 适配：批次按
 `CREATED -> LOADING -> VALIDATING -> READY -> PUBLISHED` 受状态机约束，重复提交同一

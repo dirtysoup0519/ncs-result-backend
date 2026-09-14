@@ -10,6 +10,7 @@ from typing import Any
 
 from ncs_backend.admin.migrations import MigrationRunner, initialize_control_schema, initialize_staging_schema
 from ncs_backend.admin.importers import DeliveryValidator
+from ncs_backend.admin.local_database import initialize_local_database, inspect_local_database
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     staging.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
     migrate = subparsers.add_parser("migrate", help="apply versioned control and staging migrations")
     migrate.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
+    local = subparsers.add_parser("init-local-database", help="create or update the complete local development database")
+    local.add_argument("--sqlite", type=Path, default=Path(".local/ncs.sqlite"))
+    check = subparsers.add_parser("check-local-database", help="verify the local development database structure")
+    check.add_argument("--sqlite", type=Path, default=Path(".local/ncs.sqlite"))
     return parser
 
 
@@ -41,6 +46,16 @@ def validate_delivery(schema_path: Path, manifest_path: Path, data_path: Path) -
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "init-local-database":
+        status = initialize_local_database(args.sqlite)
+        print(json.dumps({"initialized": status.valid, **status.to_dict()}, ensure_ascii=False, indent=2))
+        return 0 if status.valid else 2
+
+    if args.command == "check-local-database":
+        status = inspect_local_database(args.sqlite)
+        print(json.dumps(status.to_dict(), ensure_ascii=False, indent=2))
+        return 0 if status.valid else 2
+
     if args.command == "init-control-schema":
         args.sqlite.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(args.sqlite)
