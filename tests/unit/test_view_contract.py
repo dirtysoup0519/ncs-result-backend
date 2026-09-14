@@ -19,9 +19,13 @@ def test_view_contract_reports_missing_views_without_using_physical_tables(tmp_p
     results = inspect_view_contracts(lambda: sqlite3.connect(database))
     overview = next(item for item in results if item.view_name == "api_v1_dashboard_overview")
     ranking = next(item for item in results if item.view_name == "api_v1_station_ranking")
+    prediction = next(item for item in results if item.view_name == "api_v1_load_prediction")
     assert overview.compatible is True
     assert ranking.exists is False
     assert ranking.compatible is False
+    assert prediction.exists is False
+    assert prediction.compatible is True
+    assert prediction.to_dict()["required"] is False
     assert overview.to_dict()["viewName"] == "api_v1_dashboard_overview"
     assert ranking.to_dict()["missingColumns"]
 

@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-本仓库已完成 MySQL DB-API 方言、连接工厂、结果库迁移入口和视图合同检查脚本。当前开发环境没有 PyMySQL 和可用 MySQL 地址，因此尚未声称真实 MySQL 验收通过。
+2026-09-14 已在本机 MySQL 8.0.46 完成真实联调：控制表和结果表迁移、ADS v2.1 A0/Wave B 导入、重复导入、事务回滚、只读视图、查询 API 和权限隔离均通过。凭据不写入仓库，仍只通过进程环境变量传递。
 
 ## 联调前置条件
 
@@ -33,11 +33,14 @@ pytest -q tests/integration/test_mysql_ads.py
 
 ## 验收记录模板
 
-- MySQL 版本：待填写
-- 字符集/排序规则：待填写
-- `@@time_zone` / 应用时区：待填写
-- `@@sql_mode`：待填写
-- 迁移重复执行：待填写
-- ADS A0/Wave B 导入与回滚：待填写
-- 查询账号视图合同：待填写
-- 查询账号访问物理表/控制表：应失败
+- MySQL 版本：8.0.46
+- 数据库字符集：`utf8mb4`
+- `@@time_zone` / 应用时区：`SYSTEM` / `Asia/Shanghai`；部署到其他机器前应显式确认系统时区
+- `@@sql_mode`：`ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`
+- 迁移重复执行：通过；相同迁移版本和校验和不会重复执行 DDL
+- ADS A0/Wave B 导入：9 个逻辑数据集首次导入及重复导入均通过
+- 失败回滚：在第二个数据集写入后注入异常，新增批次记录为 0，旧总览发布仍为 7 行
+- 查询账号视图合同：9 个必需视图通过；模型预测视图属于可选上游能力，不作为当前结果库健康条件
+- 查询账号权限：9 个 `api_v1_*` 视图可读；读取 `rpt_dashboard_overview` 和 `ctl_import_batch` 均返回 MySQL 1142
+- 后端冒烟：元数据、manifest、总览、时长、热力图、排行、趋势和过程摘要等 10 个请求均返回 200
+- 执行计划：迁移账号可执行 `EXPLAIN`；只读账号因无底层表权限不能执行，这是预期的最小权限结果

@@ -132,7 +132,7 @@ class DbApiDashboardRepository:
         where, values = _date_region_filter("data_date", params, "api_v1_dashboard_overview")
         rows = self._query(
             f"""
-            SELECT metric_code, display_name, metric_value, unit, precision,
+            SELECT metric_code, display_name, metric_value, unit, `precision`,
                    data_date, data_version, generated_at, staleness
             FROM api_v1_dashboard_overview
             WHERE {' AND '.join(where)}

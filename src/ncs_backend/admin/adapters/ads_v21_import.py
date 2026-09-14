@@ -49,11 +49,13 @@ class AdsV21A0Importer:
         dialect: DatabaseDialect = SQLITE_DIALECT,
         reader: AdsV21PackageReader | None = None,
         clock: Callable[[], datetime] | None = None,
+        initialize_schema: bool = True,
     ) -> None:
         self._connection_factory = connection_factory
         self._dialect = dialect
         self._reader = reader or AdsV21PackageReader()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._initialize_schema = initialize_schema
 
     def import_package(self, package: AdsV21PackageDescriptor) -> tuple[str, ...]:
         dataset_codes = {item.dataset_code for item in package.datasets}
@@ -64,8 +66,9 @@ class AdsV21A0Importer:
         self._check_package_consistency(package, rows_by_dataset)
         connection = self._connection_factory()
         published: list[str] = []
-        MigrationRunner(dialect=self._dialect).apply(connection)
-        initialize_ads_result_schema(connection, dialect=self._dialect)
+        if self._initialize_schema:
+            MigrationRunner(dialect=self._dialect).apply(connection)
+            initialize_ads_result_schema(connection, dialect=self._dialect)
         cursor = self._dialect.cursor(connection)
         try:
             now = self._clock()

@@ -44,6 +44,11 @@ VIEW_COLUMNS: Mapping[str, frozenset[str]] = {
     ),
 }
 
+# Prediction data is an optional upstream result.  The current project stores
+# and serves it when supplied, but does not own model execution or require a
+# prediction table/view for the ADS result database to be healthy.
+OPTIONAL_VIEWS = frozenset({"api_v1_load_prediction"})
+
 
 @dataclass(frozen=True, slots=True)
 class ViewContractResult:
@@ -53,6 +58,7 @@ class ViewContractResult:
     missing_columns: tuple[str, ...]
     compatible: bool
     error: str | None = None
+    required: bool = True
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-friendly diagnostic representation."""
@@ -64,6 +70,7 @@ class ViewContractResult:
             "missingColumns": list(self.missing_columns),
             "compatible": self.compatible,
             "error": self.error,
+            "required": self.required,
         }
 
 
@@ -76,6 +83,7 @@ def inspect_view_contracts(connection_factory: ConnectionFactory) -> tuple[ViewC
     try:
         cursor = connection.cursor()
         for view_name, required in VIEW_COLUMNS.items():
+            required_view = view_name not in OPTIONAL_VIEWS
             try:
                 cursor.execute(f"SELECT * FROM {view_name} LIMIT 0")
                 columns = tuple(column[0] for column in cursor.description or ())
@@ -87,6 +95,7 @@ def inspect_view_contracts(connection_factory: ConnectionFactory) -> tuple[ViewC
                         columns=columns,
                         missing_columns=missing,
                         compatible=not missing,
+                        required=required_view,
                     )
                 )
             except Exception as exc:
@@ -96,8 +105,9 @@ def inspect_view_contracts(connection_factory: ConnectionFactory) -> tuple[ViewC
                         exists=False,
                         columns=(),
                         missing_columns=tuple(sorted(required)),
-                        compatible=False,
+                        compatible=not required_view,
                         error=str(exc),
+                        required=required_view,
                     )
                 )
     finally:

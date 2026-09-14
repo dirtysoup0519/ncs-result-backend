@@ -9,6 +9,7 @@ import pytest
 from ncs_backend.admin.adapters.ads_v21_import import AdsV21A0Importer, AdsV21ImportError, AdsV21WaveBImporter
 from ncs_backend.admin.adapters.ads_v21_package import AdsV21DatasetDescriptor, AdsV21PackageDescriptor
 from ncs_backend.admin.adapters.ads_v21_schema import ADS_V21_FILE_SPECS
+from ncs_backend.admin.ads_schema import initialize_ads_result_schema
 from ncs_backend.admin.local_database import initialize_local_database
 from ncs_backend.bootstrap import configured_query_app
 from ncs_backend.shared.config import Settings
@@ -101,6 +102,24 @@ def test_importer_publishes_a0_views_and_is_idempotent(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM ctl_quality_result WHERE passed = 1").fetchone()[0] == 6
     finally:
         connection.close()
+
+
+def test_importer_can_use_an_already_initialized_schema(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    with sqlite3.connect(database) as connection:
+        initialize_ads_result_schema(connection)
+    package, reader = _fixture_package()
+
+    result = AdsV21A0Importer(
+        lambda: sqlite3.connect(database),
+        reader=reader,
+        initialize_schema=False,
+    ).import_package(package)
+
+    assert "dashboard_overview" in result
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM api_v1_dashboard_overview").fetchone()[0] == 7
 
 
 def test_importer_rejects_cross_file_order_mismatch(tmp_path):
