@@ -8,7 +8,7 @@ is allowed to see published views only.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -429,7 +429,7 @@ class DbApiDashboardRepository:
         forecast = []
         cutoff = params.get("cutoffHour")
         for row in rows:
-            target_time = _datetime_value(row.get("target_time"))
+            target_time = _business_datetime_value(row.get("target_time"))
             if row.get("series_type") == "ACTUAL":
                 if target_time is not None and target_time.hour >= cutoff:
                     continue
@@ -456,7 +456,7 @@ class DbApiDashboardRepository:
             "availability": "AVAILABLE" if rows else "UNAVAILABLE",
             "date": _date_text(params.get("date")),
             "cutoffHour": cutoff,
-            "forecastStartAt": _datetime_text(first.get("forecast_start_at")),
+            "forecastStartAt": _business_datetime_text(first.get("forecast_start_at")),
             "energyUnit": "kWh",
             "orderCountUnit": "count",
             "actual": actual,
@@ -754,4 +754,25 @@ def _datetime_value(value: Any) -> datetime | None:
 
 def _datetime_text(value: Any) -> str | None:
     parsed = _datetime_value(value)
+    return parsed.isoformat() if parsed else None
+
+
+_BUSINESS_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def _business_datetime_value(value: Any) -> datetime | None:
+    """Interpret naive prediction timestamps as Asia/Shanghai business time.
+
+    MySQL DATETIME columns do not carry timezone metadata.  Prediction target
+    times are business timestamps, while audit timestamps remain UTC through
+    ``_datetime_value``.  Explicitly zoned values are preserved unchanged.
+    """
+    if value is None:
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return parsed.replace(tzinfo=_BUSINESS_TIMEZONE) if parsed.tzinfo is None else parsed
+
+
+def _business_datetime_text(value: Any) -> str | None:
+    parsed = _business_datetime_value(value)
     return parsed.isoformat() if parsed else None

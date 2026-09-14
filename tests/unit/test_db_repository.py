@@ -1,7 +1,12 @@
 import sqlite3
 from datetime import timezone
 
-from ncs_backend.query.db_repository import DbApiDashboardRepository, _datetime_value, _monthly_trend_rows
+from ncs_backend.query.db_repository import (
+    DbApiDashboardRepository,
+    _business_datetime_value,
+    _datetime_value,
+    _monthly_trend_rows,
+)
 
 
 def _repository(tmp_path):
@@ -133,6 +138,13 @@ def test_mysql_naive_timestamp_is_serialized_as_utc():
     assert value is not None
     assert value.tzinfo == timezone.utc
     assert value.isoformat() == "2026-09-14T09:06:27+00:00"
+
+
+def test_prediction_naive_timestamp_uses_business_timezone():
+    value = _business_datetime_value("2015-12-28 18:00:00")
+
+    assert value is not None
+    assert value.isoformat() == "2015-12-28T18:00:00+08:00"
 
 
 def test_daily_trend_rows_can_be_aggregated_for_month_view():
