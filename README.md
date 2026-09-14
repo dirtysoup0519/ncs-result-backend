@@ -24,6 +24,8 @@ python -m pytest
 python scripts/run_query.py
 ```
 
+Windows 联调环境也可以双击仓库根目录的 `start_project.cmd`，一次启动查询后端和位于相邻目录 `../ncs-dashboard/ncs-dashboard` 的 Vue 前端，并自动打开 `http://localhost:5173/`。该脚本按当前学生实训环境固定连接虚拟机 MySQL；如果目录或虚拟机地址变化，需要先修改脚本顶部配置。
+
 启动内部管理服务：
 
 ```powershell
