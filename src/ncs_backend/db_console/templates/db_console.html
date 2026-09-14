@@ -9,18 +9,18 @@
 <body>
   <main class="console-shell">
     <header class="topbar">
-      <div><span class="status-dot" id="status-dot"></span><strong>NCS 数据库工具</strong><span id="status-text">正在检查</span></div>
+      <div><span class="status-dot" id="status-dot" aria-hidden="true"></span><strong>NCS 数据库工具</strong><span id="status-text" role="status" aria-live="polite">正在检查</span></div>
       <div class="runtime-actions">
-        <button data-runtime="START">启动</button>
-        <button data-runtime="STOP" class="danger">停止</button>
-        <button data-runtime="RESTART">重启</button>
-        <button id="refresh-status">刷新</button>
+        <button type="button" data-runtime="START">启动</button>
+        <button type="button" data-runtime="STOP" class="danger">停止</button>
+        <button type="button" data-runtime="RESTART">重启</button>
+        <button type="button" id="refresh-status">刷新</button>
       </div>
     </header>
     <section class="panel sql-panel">
       <div class="panel-heading"><h1>SQL</h1><span id="sql-meta">等待执行</span></div>
       <textarea id="sql-input" spellcheck="false">SELECT * FROM ctl_dataset LIMIT 20;</textarea>
-      <div class="toolbar"><button id="run-sql" class="primary">执行 SQL</button><button id="clear-sql">清空</button><span>Ctrl+Enter 执行</span></div>
+      <div class="toolbar"><button type="button" id="run-sql" class="primary">执行 SQL</button><button type="button" id="clear-sql">清空</button><span>Ctrl+Enter 执行</span></div>
       <div id="sql-error" class="error" hidden></div>
       <div class="table-wrap"><table id="result-table"><tbody><tr><td class="empty">执行查询后显示结果</td></tr></tbody></table></div>
     </section>
@@ -52,15 +52,17 @@
     function renderRows(data) {
       const table = $('result-table'); table.replaceChildren();
       if (!data.columns.length) { table.innerHTML = `<tbody><tr><td class="empty">影响行数：${data.affectedRows ?? 0}</td></tr></tbody>`; return; }
-      const head = document.createElement('tr'); data.columns.forEach((column) => { const cell = document.createElement('th'); cell.textContent = column; head.appendChild(cell); });
-      const tbody = document.createElement('tbody'); tbody.appendChild(head);
+      const thead = document.createElement('thead'); const head = document.createElement('tr'); data.columns.forEach((column) => { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = column; head.appendChild(cell); }); thead.appendChild(head);
+      const tbody = document.createElement('tbody');
       data.rows.forEach((row) => { const tr = document.createElement('tr'); row.forEach((value) => { const td = document.createElement('td'); td.textContent = value == null ? 'NULL' : String(value); tr.appendChild(td); }); tbody.appendChild(tr); });
-      table.appendChild(tbody);
+      table.append(thead, tbody);
     }
     async function runSql() {
       const statement = $('sql-input').value.trim(); if (!statement) return;
+      $('run-sql').disabled = true; $('sql-meta').textContent = '执行中…';
       try { const data = await request('/internal/db-console/sql', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ statement }) }); renderRows(data); $('sql-meta').textContent = `${data.durationMs}ms / ${data.rowCount} rows`; $('sql-error').hidden = true; await refreshLogs(); }
       catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; }
+      finally { $('run-sql').disabled = false; }
     }
     async function refreshLogs() {
       try { const data = await request(`/internal/db-console/logs?after=${state.lastSequence}&limit=200`); data.items.forEach((item) => { const line = document.createElement('div'); line.className = `log-line ${item.level.toLowerCase()}`; line.textContent = `${item.time}  ${item.category}  ${item.action}  ${item.message}`; $('logs').appendChild(line); }); state.lastSequence = data.lastSequence; const box = $('logs'); box.scrollTop = box.scrollHeight; }

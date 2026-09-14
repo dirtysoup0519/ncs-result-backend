@@ -53,3 +53,5 @@ def test_page_is_available(tmp_path):
     response = client.get("/db-console")
     assert response.status_code == 200
     assert "NCS 数据库工具" in response.text
+    assert "执行中" in response.text
+    assert client.get("/internal/db-console/static/db_console.css").status_code == 200
