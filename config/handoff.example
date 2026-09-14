@@ -1,5 +1,6 @@
 # Copy this file to .local/ncs.env. Never put a real password in this example.
-NCS_DATABASE_URL=mysql+pymysql://ncs_ads_reader:<reader-password>@127.0.0.1:3306/ncs_analytics
+# Windows Flask -> MySQL in the VM. Replace <vm-ip> with the VM address.
+NCS_DATABASE_URL=mysql+pymysql://ncs_ads_reader:<reader-password>@<vm-ip>:3306/ncs_analytics
 NCS_QUERY_HOST=127.0.0.1
 NCS_QUERY_PORT=5000
 NCS_QUERY_API_KEY=<random-development-api-key>
