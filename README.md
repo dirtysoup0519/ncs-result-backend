@@ -1,8 +1,8 @@
 # NCS 结果库与后端
 
-当前分支已完成工程骨架、Manifest/Schema/质量规则/状态机基础，以及按 V1 冻结合同搭建的查询 API 路由和空数据适配器。真实 MySQL 视图适配仍待上游字段确认。
+当前分支已经完成 ADS v2.1 模拟联调包到 MySQL 8.0.46 结果库和大屏查询 API 的首轮端到端闭环，包括包校验、显式转换、结果表、发布视图、重复导入、失败回滚和三账号权限隔离。项目当前状态和下一步统一见 `docs/项目当前状态与下一步.md`。
 
-查询仓储同时提供 `inspect_view_contracts` / `assert_view_contracts`，只检查白名单 `api_v1_*` 视图的列结构，不读取业务数据；真实结果表和 ADS 字段确认后再接入迁移与运行检查。
+查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。9 个当前必需视图已通过真实 MySQL 验证；预测视图属于可选上游能力，不作为当前健康检查的阻断项。
 
 当前范围只包含处理后数据的结果库、数据管理后端和大屏查询后端。机器学习训练、推理、模型管理及特征处理不在当前范围；上游若提供预测结果，本项目按普通处理后数据集导入和发布。范围决策见 `docs/当前范围决策.md`，历史 ML 原型仅保存在 `archive/ml-control-plane-prototype`。
 
@@ -56,7 +56,7 @@ python scripts/init_local_database.py --sqlite .local/ncs.sqlite
 python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
 ```
 
-统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发，不是正式结果库；真实 MySQL 迁移和生产凭据接入仍需单独配置。
+统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发；真实 MySQL 迁移和 ADS v2.1 导入已经验收，连接凭据仍必须通过环境变量配置且不得进入 Git。
 
 数据库窗口连接该开发库时，在当前终端设置连接地址后启动：
 
@@ -94,3 +94,4 @@ python scripts/run_local.py console
 - `docs/前端启动元数据接口简表.md`
 - `docs/data-contract.md`
 - `docs/当前范围决策.md`
+- `docs/项目当前状态与下一步.md`
