@@ -12,6 +12,92 @@
 
 前端 `ncs-dashboard.zip` 只作为只读联调依据，不纳入或修改其源码。实际请求与联调门禁见 `docs/前端代码包只读评审.md`。
 
+## 环境准备与前置工作（新成员必读）
+
+> 按项目纪律，所有环境要求和前置工作以本章为准并保持更新；细节设计可再读 `docs/`，但接入步骤以本章为唯一入口。
+
+### 1. 前置软件
+
+| 软件 | 版本要求 | 用途 |
+| --- | --- | --- |
+| Python | 3.11 或 3.12（验收固定） | 后端全部服务与脚本 |
+| Git | 任意较新版本 | 拉取仓库；推送需已配置的 SSH 密钥或账号凭据 |
+| MySQL | 5.7 或 8.0 | 真实结果库（可选，本地开发可用 SQLite 免装） |
+| Node.js | 23 及以上 | 仅前端 `ncs-dashboard` 需要，后端开发可不装 |
+| bash + flock + cron | 常见 Linux 工具 | 仅虚拟机 Shell 自动同步需要（`scripts/shell/`，当前分支） |
+
+### 2. 创建环境并安装依赖
+
+PowerShell（Windows 实训环境）：
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev,mysql]"
+```
+
+bash（Linux/虚拟机）：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev,mysql]"
+```
+
+依赖组说明：
+
+- 默认仅依赖 `Flask`，足以运行全部单元测试（SQLite 路径）。
+- `mysql` 组提供 `PyMySQL`，连接真实 MySQL（含集成测试和 Shell 同步）时必须安装。
+- `dev` 组提供 `pytest`。
+- 预测功能（`src/ncs_backend/prediction/`）运行时额外需要 `numpy` 和 `torch`，未声明为包依赖，按需手动 `pip install numpy torch`；不装不影响结果库与查询功能，仅张量构建相关测试会报缺少依赖的明确错误。
+
+### 3. 环境变量与本地配置
+
+仓库不保存真实凭据。本地配置统一放在被 Git 忽略的 `.local/ncs.env`，启动脚本会自动加载；现有进程环境变量优先。模板见 `config/handoff.example`。
+
+关键变量：
+
+| 变量 | 必填场景 | 说明 |
+| --- | --- | --- |
+| `NCS_DATABASE_URL` | 连接数据库时 | 例如 `sqlite:///.local/ncs.sqlite` 或 `mysql+pymysql://ncs_ads_admin:<密码>@127.0.0.1:3306/ncs_analytics` |
+| `NCS_QUERY_HOST` / `NCS_QUERY_PORT` | 跨机器联调时 | 默认 `127.0.0.1:5000`，管理/控制台默认只绑本机 |
+| `NCS_QUERY_API_KEY` | 前端跨机访问时 | 只读查询接口的开发 API Key |
+| `NCS_CORS_ORIGINS` | 浏览器联调时 | 允许的前端 Origin 白名单，逗号分隔 |
+| `NCS_MYSQL_MIGRATOR_URL` / `NCS_MYSQL_ADMIN_URL` / `NCS_MYSQL_READER_URL` / `NCS_MYSQL_PRIVILEGED_URL` | 真实 MySQL 迁移与验收时 | 三账号权限体系，root/特权账号仅迁移授权时使用 |
+| `NCS_ADS_EXCHANGE_ROOT` / `NCS_ADS_SYNC_INTERVAL_SECONDS` 等 | Shell 自动同步（当前分支） | 见 `scripts/shell/ncs_ads_sync.env.example` 与 `docs/ADS_v2.5自动同步与模型推理设计.md` |
+
+### 4. 首次本地初始化与自检
+
+初始化完整本地开发库（控制表、staging、迁移记录，可重复执行）：
+
+```powershell
+python scripts/init_local_database.py --sqlite .local/ncs.sqlite
+python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
+```
+
+运行全部测试确认环境就绪（预期 `N passed, 2 skipped`；跳过项是需要真实 MySQL 与 ADS 包路径的集成测试）：
+
+```powershell
+python -m pytest
+```
+
+### 5. 服务启动速查
+
+三个服务的统一入口（会先幂等初始化开发库），默认端口 `admin=5001`、`query=5000`、`console=5002`：
+
+```powershell
+python scripts/run_local.py admin    # 或 query / console
+```
+
+等价的单独入口：`scripts/run_query.py`、`scripts/run_admin.py`、`scripts/run_db_console.py`。Windows 联调可双击 `start_project.cmd` 同时启动后端与相邻目录的 Vue 前端。
+
+### 6. 接入真实 MySQL（可选）
+
+按 `docs/仓库下载与联调操作手册.md` 第 8～10 节操作；命令入口：
+
+```powershell
+python scripts/setup_mysql_ads.py --initialize --grant-reader --verify   # 迁移+授权+自检
+python scripts/verify_mysql_e2e.py                                        # 完整端到端验收
+```
+
 ## 本地验证
 
 ```powershell
@@ -123,3 +209,4 @@ python scripts/verify_mysql_e2e.py
 - `docs/项目当前状态与下一步.md`
 - `docs/项目业务架构与代码规划.md`
 - `docs/ADS_Spark_v2.3交接包评审.md`
+- `docs/ADS_v2.5自动同步与模型推理设计.md`
