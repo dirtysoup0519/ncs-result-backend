@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from ncs_backend.admin.ads_schema import ADS_VIEW_NAMES, initialize_ads_result_schema
-from ncs_backend.admin.prediction_schema import initialize_prediction_schema
+from ncs_backend.admin.prediction_schema import PREDICTION_VIEW_NAMES, initialize_prediction_schema
 from ncs_backend.admin.migrations import MigrationRunner
 from ncs_backend.shared.db import MYSQL_DIALECT
 
@@ -42,7 +42,7 @@ def grant_reader_views(
     database: str,
     reader_account: str = "ncs_ads_reader",
     reader_host: str = "localhost",
-    views: Iterable[str] = ADS_VIEW_NAMES,
+    views: Iterable[str] = (*ADS_VIEW_NAMES, *PREDICTION_VIEW_NAMES),
 ) -> tuple[str, ...]:
     database = _safe_identifier(database, "database")
     reader_account = _safe_identifier(reader_account, "reader account")

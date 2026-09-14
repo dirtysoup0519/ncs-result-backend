@@ -16,6 +16,7 @@ from ncs_backend.db_console.app import create_app as create_db_console_app
 from ncs_backend.db_console.connections import connection_factory_from_url, database_dialect_from_url
 from ncs_backend.query.app import create_app as create_query_app
 from ncs_backend.query.db_repository import DbApiDashboardRepository
+from ncs_backend.prediction.management import PredictionManagementService
 from ncs_backend.shared.config import Settings
 from ncs_backend.shared.db import DatabaseDialect
 
@@ -49,6 +50,10 @@ def configured_admin_app(settings: Settings) -> Flask:
             dialect=database.dialect,
         ),
         ads_v23_import_service=AdsV23ImportService(
+            database.connection_factory,
+            dialect=database.dialect,
+        ),
+        prediction_service=PredictionManagementService(
             database.connection_factory,
             dialect=database.dialect,
         ),
