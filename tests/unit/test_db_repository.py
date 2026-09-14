@@ -115,6 +115,10 @@ def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
     profile = repository.fetch("weekday_weekend", {})
     assert profile.data["series"][0]["rawValues"] == [10]
     assert profile.data["series"][1]["rawValues"] == [4]
+    assert profile.data["indicators"][0]["max"] == 10
+    assert profile.data["series"][0]["normalizedValues"] == ["1"]
+    assert profile.data["series"][1]["normalizedValues"] == ["0.4"]
+    assert profile.data["normalization"] == {"method": "PAIR_MAX", "version": "1.0"}
     assert profile.data_date.isoformat() == "2019-09-13"
 
     prediction = repository.fetch("prediction", {"date": "2019-09-13", "cutoffHour": 16})
