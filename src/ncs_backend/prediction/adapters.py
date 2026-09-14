@@ -72,13 +72,15 @@ class MultiScaleConvTransformerV1:
             import torch
         except ImportError as exc:  # pragma: no cover
             raise ModelPackageError("PyTorch is required for inference") from exc
+        tensor = dataset.tensor.clone()
+        mean = float(model.norm["mean"][0])
+        std = float(model.norm["std"][0])
+        tensor[:, :, 0] = (tensor[:, :, 0] - mean) / std
         with torch.no_grad():
-            output = model.model(dataset.tensor, dataset.calendar_tensor)
+            output = model.model(tensor, dataset.calendar_tensor)
         values = output[0].detach().cpu().tolist()[:horizon]
         if len(values) != horizon or any(not math.isfinite(float(value)) for value in values):
             raise ModelPackageError("model returned invalid prediction values")
-        mean = float(model.norm["mean"][0])
-        std = float(model.norm["std"][0])
         return [max(0.0, float(value) * std + mean) for value in values]
 
 
