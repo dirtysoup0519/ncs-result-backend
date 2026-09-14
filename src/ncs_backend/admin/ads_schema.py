@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 4
+ADS_MIGRATION_VERSION = 5
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -314,6 +314,113 @@ ADS_VIEW_SQL = (
     """,
 )
 
+ADS_MYSQL_VIEW_SQL = (
+    """
+    CREATE VIEW api_v1_data_status AS
+    SELECT b.dataset_code, b.data_date, b.row_count AS source_record_count,
+           CAST((SELECT r.metric_value
+                 FROM rpt_dashboard_overview r
+                 JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                   AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+                 WHERE r.metric_code = 'total_station_count'
+                 ORDER BY r.data_date DESC LIMIT 1) AS SIGNED) AS station_count,
+           b.updated_at,
+           CASE WHEN EXISTS (
+               SELECT 1 FROM ctl_quality_result q
+               WHERE q.batch_id = b.batch_id AND q.passed = 0
+                 AND q.severity IN ('BLOCKER', 'ERROR')
+           ) THEN 'FAILED' ELSE 'PASSED' END AS quality_status,
+           'UNKNOWN' AS staleness, b.schema_version AS data_version
+    FROM ctl_import_batch b
+    JOIN ctl_publication p ON p.dataset_code = b.dataset_code
+      AND p.batch_id = b.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_dashboard_overview AS
+    SELECT r.metric_code, r.display_name, r.metric_value, r.unit,
+           r.precision_value AS `precision`, r.data_date, r.data_version,
+           r.generated_at, r.staleness
+    FROM rpt_dashboard_overview r
+    JOIN ctl_publication p ON p.dataset_code = 'dashboard_overview'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_platform_distribution AS
+    SELECT r.platform_code, r.display_name, r.order_count, r.total_fees,
+           r.order_ratio, r.data_date, r.data_version, r.generated_at, r.staleness
+    FROM rpt_platform_distribution r
+    JOIN ctl_publication p ON p.dataset_code = 'platform_distribution'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_fee_energy_trend AS
+    SELECT r.granularity, r.period, r.order_count, r.total_fees, r.total_kwh,
+           r.period_start, r.data_date, r.data_version, r.generated_at,
+           r.staleness, r.region_id, r.station_id
+    FROM rpt_fee_energy_trend r
+    JOIN ctl_publication p ON p.dataset_code IN ('fee_energy_daily', 'fee_energy_monthly')
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_station_ranking AS
+    SELECT r.station_id, r.station_name, r.order_count, r.total_fees,
+           r.total_kwh, r.data_date, r.data_version, r.generated_at,
+           r.staleness, r.region_id
+    FROM rpt_station_ranking r
+    JOIN ctl_publication p ON p.dataset_code = 'station_ranking_snapshot'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_process_summary AS
+    SELECT r.scope_type, NULLIF(r.station_id, '') AS station_id, r.start_date, r.end_date,
+           r.record_count, r.session_count, r.average_soc, r.average_current,
+           r.average_voltage, r.average_max_temperature, r.data_date,
+           r.data_version, r.generated_at, r.staleness
+    FROM rpt_process_summary r
+    JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_duration_distribution AS
+    SELECT r.bucket_code, r.label, r.lower_minutes, r.upper_minutes,
+           r.order_count, r.ratio, r.data_date, r.data_version,
+           r.generated_at, r.staleness, r.region_id, r.station_id
+    FROM rpt_duration_distribution r
+    JOIN ctl_publication p ON p.dataset_code = 'charging_duration_distribution'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_weekday_weekend AS
+    SELECT r.day_type, r.metric_key, r.label, r.unit, r.metric_order,
+           r.max_value, r.raw_value, r.normalized_value,
+           r.normalization_method, r.normalization_version,
+           r.start_date, r.end_date, r.data_version, r.generated_at,
+           r.staleness, r.region_id
+    FROM rpt_weekday_weekend r
+    JOIN ctl_publication p ON p.dataset_code = 'weekday_weekend_profile'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+    """
+    CREATE VIEW api_v1_station_hour_heatmap AS
+    SELECT r.station_id, r.station_name, r.hour, r.value, r.is_observed,
+           r.metric, CASE r.metric
+               WHEN 'kwh' THEN 'charging_energy'
+               WHEN 'orders' THEN 'order_count'
+               WHEN 'fees' THEN 'total_fees'
+               ELSE r.metric END AS metric_code,
+           CASE r.metric
+               WHEN 'kwh' THEN 'kWh'
+               WHEN 'orders' THEN 'count'
+               WHEN 'fees' THEN 'CNY'
+               ELSE 'UNKNOWN' END AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness,
+           r.region_id
+    FROM rpt_station_hour_heatmap r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_heatmap_snapshot'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    """,
+)
+
 ADS_SCHEMA_STATEMENTS = (
     *ADS_SCHEMA_SQL,
     *ADS_INDEX_SQL,
@@ -325,7 +432,7 @@ ADS_MYSQL_SCHEMA_STATEMENTS = (
     *ADS_SCHEMA_SQL,
     *ADS_MYSQL_INDEX_SQL,
     *(f"DROP VIEW IF EXISTS {view_name}" for view_name in ADS_VIEW_NAMES),
-    *ADS_VIEW_SQL,
+    *ADS_MYSQL_VIEW_SQL,
 )
 
 
