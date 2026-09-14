@@ -450,35 +450,35 @@ GET /api/v1/predictions/load?date=2015-12-28&cutoffHour=18&horizon=24
 SQLite 和虚拟机 MySQL 完成 18 个数据集的真实导入，批次状态为 `PUBLISHED`。
 命令入口仍为 `scripts/import_ads_v23.py`（名称保持兼容，实际支持 v2.3/v2.5）。
 
-### S2：Shell 自动入口
+### S2：Shell 自动入口（已实现基础版本）
 
-- 实现目录合同、完成标记、`flock`、一次同步和 watch。
+- 已实现目录合同、完成标记、`flock`、一次同步和 watch。
 - 复用 S1 Python 导入命令。
 - 测试半包、坏校验和、数据库断连、重复批次和并发触发。
 
 验收：新包出现后 60 秒内发布；坏包不影响旧数据；日志能定位批次和错误。
 
-### S3：预测结果库与模型注册
+### S3：预测结果库与模型注册（已实现）
 
-- 新增三张模型/预测表和正式预测视图。
-- 内置 `multiscale_conv_transformer_v1` 架构。
-- 安全读取并验证本次 `model_all.pth`。
-- 模型常驻加载和激活回滚。
+- 已新增三张模型/预测表和正式预测视图。
+- 已内置 `multiscale_conv_transformer_v1` Adapter。
+- 已使用 `weights_only=True` 安全读取并验证本次 `model_all.pth`。
+- 已实现模型登记、激活和版本切换。
 
 验收：错误权重、篡改权重、错误输入合同均被拒绝；当前权重探针推理成功。
 
-### S4：Dataset 构造与预测发布
+### S4：Dataset 构造与预测发布（已实现）
 
-- 从 PUBLISHED `load_hourly` 读取连续 512 小时。
-- 生成未来 24 小时预测。
-- 保存实际与预测序列并原子发布。
-- 接通现有 `/api/v1/predictions/load`。
+- 已从 PUBLISHED `load_hourly` 读取连续 512 小时。
+- 已生成未来 24 小时预测。
+- 已保存实际与预测序列并原子发布。
+- 已接通现有 `/api/v1/predictions/load`。
 
 验收：24 个预测点时间连续、值有限且非负，血缘可追溯到模型版本和 ADS 批次。
 
-### S5：自动串联与前端联调
+### S5：自动串联与前端联调（自动入口已实现，前端轮询待联调）
 
-- 新 `load_hourly` 发布成功后异步触发预测。
+- Shell 新 `load_hourly` 发布成功后可触发预测。
 - 推理失败保留旧预测。
 - 前端环境参数对齐最新预测日期和 cutoff。
 - 完成真实页面、日志和故障恢复验收。
