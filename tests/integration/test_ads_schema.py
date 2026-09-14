@@ -10,6 +10,7 @@ from ncs_backend.admin.ads_schema import (
     initialize_ads_result_schema,
 )
 from ncs_backend.admin.local_database import initialize_local_database
+from ncs_backend.query.db_repository import DbApiDashboardRepository
 from ncs_backend.query.view_contract import inspect_view_contracts
 
 
@@ -105,3 +106,41 @@ def test_station_daily_ranking_uses_full_period_and_common_end_date(tmp_path):
         connection.close()
 
     assert ranking == [("S1", 5, 5, "2019-02-01"), ("S2", 4, 4, "2019-02-01")]
+
+
+def test_station_hour_daily_heatmap_aggregates_period_and_selects_top_stations(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        initialize_ads_result_schema(connection)
+        rows = [
+            ("hour-batch", "2019-01-01", "S1", "站点1", 1, 2, "10", "2", 1, "v2.3"),
+            ("hour-batch", "2019-02-01", "S1", "站点1", 1, 3, "15", "3", 1, "v2.3"),
+            ("hour-batch", "2019-01-01", "S2", "站点2", 1, 10, "20", "4", 1, "v2.3"),
+        ]
+        connection.executemany(
+            "INSERT INTO rpt_station_hour_daily (batch_id, data_date, station_id, station_name, stat_hour, order_count, total_kwh, total_fees, is_observed, data_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.execute(
+            "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("hour-batch", "station_hour_daily", "2.0.0", "source", "ads://source", "c" * 64, "2019-02-01", 3, "PUBLISHED"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            ("hour-pub", "station_hour_daily", "hour-batch", "2.0.0", "PUBLISHED"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    repository = DbApiDashboardRepository(lambda: sqlite3.connect(database))
+    result = repository.fetch("heatmap", {"metric": "kwh", "limit": 2})
+
+    assert [station["stationId"] for station in result.data["stations"]] == ["S1", "S2"]
+    assert len(result.data["points"]) == 48
+    assert result.data["points"][1]["value"] == "25"
+    assert result.data["points"][1]["isObserved"] is True
+    assert result.data["valueRange"]["min"] == "0"
+    assert result.data["valueRange"]["max"] == "25"

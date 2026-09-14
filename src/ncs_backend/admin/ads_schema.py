@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 9
+ADS_MIGRATION_VERSION = 11
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -412,26 +412,38 @@ ADS_VIEW_SQL = (
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_heatmap_snapshot'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_kwh AS value,
-           r.is_observed, 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.total_kwh) AS value,
+           MAX(r.is_observed), 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.order_count AS value,
-           r.is_observed, 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.order_count) AS value,
+           MAX(r.is_observed), 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_fees AS value,
-           r.is_observed, 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.total_fees) AS value,
+           MAX(r.is_observed), 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     """,
 )
 
@@ -558,26 +570,38 @@ ADS_MYSQL_VIEW_SQL = (
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_heatmap_snapshot'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_kwh AS value,
-           r.is_observed, 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.total_kwh) AS value,
+           MAX(r.is_observed), 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.order_count AS value,
-           r.is_observed, 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.order_count) AS value,
+           MAX(r.is_observed), 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     UNION ALL
-    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_fees AS value,
-           r.is_observed, 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
-           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, SUM(r.total_fees) AS value,
+           MAX(r.is_observed), 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
+           latest.data_date,
+           r.data_version, MAX(r.generated_at), r.staleness, NULL AS region_id
     FROM rpt_station_hour_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    JOIN (SELECT batch_id, MAX(data_date) AS data_date FROM rpt_station_hour_daily GROUP BY batch_id) latest
+      ON latest.batch_id = r.batch_id
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.stat_hour, latest.data_date, r.data_version, r.staleness
     """,
 )
 

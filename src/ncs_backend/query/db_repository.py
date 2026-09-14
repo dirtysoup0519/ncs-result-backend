@@ -268,13 +268,14 @@ class DbApiDashboardRepository:
             values,
         )
         limit = int(params.get("limit", 8))
-        selected_stations: list[Any] = []
+        station_totals: dict[Any, Decimal] = {}
         for row in rows:
             station_id = row.get("station_id")
-            if station_id not in selected_stations:
-                selected_stations.append(station_id)
-            if len(selected_stations) >= limit:
-                break
+            station_totals[station_id] = station_totals.get(station_id, Decimal("0")) + Decimal(str(row.get("value") or 0))
+        selected_stations = [
+            station_id
+            for station_id, _ in sorted(station_totals.items(), key=lambda item: (-item[1], str(item[0])))[:limit]
+        ]
         selected = set(selected_stations)
         station_rows = {row.get("station_id"): row for row in rows if row.get("station_id") in selected}
         point_rows = {
