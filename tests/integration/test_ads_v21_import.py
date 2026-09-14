@@ -155,6 +155,7 @@ def test_configured_query_app_reads_published_ads_views(tmp_path):
     assert trend.json["data"]["granularity"] == "MONTH"
     assert len(trend.json["data"]["points"]) == 1
     assert status.json["data"]["qualityStatus"] == "PASSED"
+    assert status.json["data"]["sourceRecordCount"] == 1
     assert status.json["data"]["stationCount"] == 1
     available = {item["capabilityCode"]: item["available"] for item in capabilities.json["data"]["items"]}
     assert available["overview"] is True

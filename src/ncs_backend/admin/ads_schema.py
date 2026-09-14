@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 7
+ADS_MIGRATION_VERSION = 8
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -292,7 +292,15 @@ ADS_MYSQL_INDEX_SQL = (
 ADS_VIEW_SQL = (
     """
     CREATE VIEW IF NOT EXISTS api_v1_data_status AS
-    SELECT b.dataset_code, b.data_date, b.row_count AS source_record_count,
+    SELECT b.dataset_code, b.data_date,
+           CASE WHEN b.dataset_code = 'dashboard_overview' THEN CAST((
+               SELECT r.metric_value
+               FROM rpt_dashboard_overview r
+               JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                 AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+               WHERE r.metric_code = 'total_order_count'
+               ORDER BY r.data_date DESC LIMIT 1
+           ) AS INTEGER) ELSE b.row_count END AS source_record_count,
            CAST((SELECT r.metric_value
                  FROM rpt_dashboard_overview r
                  JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
@@ -429,7 +437,15 @@ ADS_VIEW_SQL = (
 ADS_MYSQL_VIEW_SQL = (
     """
     CREATE VIEW api_v1_data_status AS
-    SELECT b.dataset_code, b.data_date, b.row_count AS source_record_count,
+    SELECT b.dataset_code, b.data_date,
+           CASE WHEN b.dataset_code = 'dashboard_overview' THEN CAST((
+               SELECT r.metric_value
+               FROM rpt_dashboard_overview r
+               JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                 AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+               WHERE r.metric_code = 'total_order_count'
+               ORDER BY r.data_date DESC LIMIT 1
+           ) AS SIGNED) ELSE b.row_count END AS source_record_count,
            CAST((SELECT r.metric_value
                  FROM rpt_dashboard_overview r
                  JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'

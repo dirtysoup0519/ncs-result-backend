@@ -102,16 +102,17 @@ class DbApiDashboardRepository:
         return {"topic": topic, "regions": [], "stations": stations, "dateRange": date_range}
 
     def _fetch_data_status(self, params: Mapping[str, Any]) -> QueryPayload:
+        dataset_code = params.get("datasetCode") or "dashboard_overview"
         rows = self._query(
             """
             SELECT data_date, source_record_count, station_count, updated_at,
                    quality_status, staleness, data_version
             FROM api_v1_data_status
-            WHERE dataset_code = COALESCE(?, dataset_code)
-            ORDER BY data_date DESC
+            WHERE dataset_code = ?
+            ORDER BY data_date DESC, updated_at DESC
             LIMIT 1
             """,
-            (params.get("datasetCode"),),
+            (dataset_code,),
         )
         if not rows:
             return QueryPayload(data={"dataDate": None, "sourceRecordCount": 0, "stationCount": 0, "updatedAt": None, "qualityStatus": "UNKNOWN", "staleness": "UNKNOWN"})
