@@ -1,8 +1,7 @@
-"""A0 importer for the verified ADS v2.1 package.
+"""Result importers for the verified ADS v2.1 package.
 
-This adapter publishes only the five A0 datasets whose semantics are stable
-enough for the current Wave A contract. It keeps package-specific transforms
-here and leaves the generic batch/publication state machine independent.
+The adapters keep package-specific transforms here and leave the generic
+batch/publication state machine independent.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import hashlib
 import json
 from typing import Any
 
-from ncs_backend.admin.adapters.ads_v21_package import AdsV21PackageDescriptor, AdsV21PackageError, AdsV21PackageReader
+from ncs_backend.admin.adapters.ads_v21_package import AdsV21PackageDescriptor, AdsV21PackageReader
 from ncs_backend.admin.ads_schema import initialize_ads_result_schema
 from ncs_backend.admin.migrations import MigrationRunner
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
@@ -28,6 +27,11 @@ A0_DATASETS = (
     "station_ranking_snapshot",
     "charging_process_daily",
 )
+WAVE_B_DATASETS = (
+    "charging_duration_distribution",
+    "weekday_weekend_profile",
+    "station_hour_heatmap_snapshot",
+)
 PLATFORM_LABELS = {"android": "Android", "ios": "iOS", "web": "Web"}
 
 
@@ -36,6 +40,8 @@ class AdsV21ImportError(RuntimeError):
 
 
 class AdsV21A0Importer:
+    DATASETS = A0_DATASETS
+
     def __init__(
         self,
         connection_factory: ConnectionFactory,
@@ -51,9 +57,9 @@ class AdsV21A0Importer:
 
     def import_package(self, package: AdsV21PackageDescriptor) -> tuple[str, ...]:
         dataset_codes = {item.dataset_code for item in package.datasets}
-        if not set(A0_DATASETS).issubset(dataset_codes):
-            missing = sorted(set(A0_DATASETS) - dataset_codes)
-            raise AdsV21ImportError(f"A0 dataset is missing: {missing}")
+        if not set(self.DATASETS).issubset(dataset_codes):
+            missing = sorted(set(self.DATASETS) - dataset_codes)
+            raise AdsV21ImportError(f"required dataset is missing: {missing}")
         rows_by_dataset = {code: self._reader.read_rows(package, code) for code in dataset_codes}
         self._check_package_consistency(package, rows_by_dataset)
         connection = self._connection_factory()
@@ -65,14 +71,15 @@ class AdsV21A0Importer:
             now = self._clock()
             source_date = self._source_date(rows_by_dataset["fee_energy_daily"])
             source_hash = _package_hash(package)
-            for dataset_code in A0_DATASETS:
+            source_start_date = self._source_start_date(rows_by_dataset["fee_energy_daily"])
+            for dataset_code in self.DATASETS:
                 descriptor = next(item for item in package.datasets if item.dataset_code == dataset_code)
                 batch_id = _batch_id(package.source_batch_id, dataset_code)
                 self._ensure_control_records(cursor, package.source_batch_id, dataset_code, descriptor, batch_id, source_date, source_hash, now)
                 if self._is_published(cursor, dataset_code, batch_id):
                     published.append(dataset_code)
                     continue
-                self._insert_result_rows(cursor, dataset_code, batch_id, rows_by_dataset[dataset_code], source_date, now)
+                self._insert_result_rows(cursor, dataset_code, batch_id, rows_by_dataset[dataset_code], source_start_date, source_date, now)
                 self._record_quality(cursor, batch_id, descriptor.row_count, now)
                 cursor.execute(
                     "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, 'PUBLISHED', ?)",
@@ -139,7 +146,7 @@ class AdsV21A0Importer:
             (f"quality-{batch_id}-package", batch_id, "ADS_PACKAGE_RECONCILIATION", row_count, json.dumps({"status": "passed"}), _timestamp(now)),
         )
 
-    def _insert_result_rows(self, cursor, dataset_code: str, batch_id: str, rows: tuple[dict[str, str], ...], source_date: date, now: datetime) -> None:
+    def _insert_result_rows(self, cursor, dataset_code: str, batch_id: str, rows: tuple[dict[str, str], ...], source_start_date: date, source_date: date, now: datetime) -> None:
         version = "v2.1"
         timestamp = _timestamp(now)
         if dataset_code == "dashboard_overview":
@@ -183,8 +190,60 @@ class AdsV21A0Importer:
                 "INSERT INTO rpt_process_summary (batch_id, data_date, scope_type, station_id, start_date, end_date, record_count, session_count, average_soc, average_current, average_voltage, average_max_temperature, data_version, generated_at, loaded_at) VALUES (?, ?, 'ALL_STATIONS', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(batch_id, row["stat_date"], row["stat_date"], row["stat_date"], _integer(row["record_cnt"]), _integer(row["session_cnt"]), _decimal(row["avg_soc"]), _decimal(row["avg_current"]), _decimal(row["avg_pack_voltage"]), _decimal(row["avg_max_temp"]), version, timestamp, timestamp) for row in rows],
             )
+        elif dataset_code == "charging_duration_distribution":
+            buckets = {
+                "0-1h": ("PT0H_PT1H", 0, 60),
+                "1-2h": ("PT1H_PT2H", 60, 120),
+                "2-3h": ("PT2H_PT3H", 120, 180),
+                "3h+": ("PT3H_PLUS", 180, None),
+            }
+            values = []
+            for row in rows:
+                try:
+                    bucket_code, lower, upper = buckets[row["duration_bucket"]]
+                except KeyError as exc:
+                    raise AdsV21ImportError(f"unsupported duration bucket: {row.get('duration_bucket')}") from exc
+                values.append((batch_id, bucket_code, row["duration_bucket"], lower, upper, _integer(row["order_cnt"]), _ratio(row["order_ratio"]), source_date.isoformat(), version, timestamp, timestamp))
+            cursor.executemany(
+                "INSERT INTO rpt_duration_distribution (batch_id, bucket_code, label, lower_minutes, upper_minutes, order_count, ratio, data_date, data_version, generated_at, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        elif dataset_code == "weekday_weekend_profile":
+            day_types = {"workday": "WEEKDAY", "weekday": "WEEKDAY", "weekend": "WEEKEND"}
+            metrics = (
+                ("order_count", "订单量", "count", "order_cnt"),
+                ("charging_energy", "充电量", "kWh", "total_kwh"),
+                ("total_fees", "费用", "CNY", "total_fees"),
+                ("user_count", "用户数", "count", "user_cnt"),
+                ("average_charge_hours", "平均时长", "hour", "avg_charge_hours"),
+            )
+            values = []
+            for row in rows:
+                try:
+                    day_type = day_types[row["day_type"].lower()]
+                except KeyError as exc:
+                    raise AdsV21ImportError(f"unsupported day type: {row.get('day_type')}") from exc
+                for metric_order, (metric_key, label, unit, source_field) in enumerate(metrics, start=1):
+                    values.append((batch_id, day_type, metric_key, label, unit, metric_order, None, _decimal(row[source_field]), None, None, None, source_start_date.isoformat(), source_date.isoformat(), version, timestamp, timestamp))
+            cursor.executemany(
+                "INSERT INTO rpt_weekday_weekend (batch_id, day_type, metric_key, label, unit, metric_order, max_value, raw_value, normalized_value, normalization_method, normalization_version, start_date, end_date, data_version, generated_at, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        elif dataset_code == "station_hour_heatmap_snapshot":
+            metrics = (("kwh", "total_kwh"), ("orders", "order_cnt"), ("fees", "total_fees"))
+            values = []
+            for row in rows:
+                hour = _integer(row["stat_hour"])
+                if not 0 <= hour <= 23:
+                    raise AdsV21ImportError(f"station heatmap hour must be 0..23: {hour}")
+                for metric, source_field in metrics:
+                    values.append((batch_id, row["station_id"], row["station_name"], hour, metric, _decimal(row[source_field]), 1, None, version, timestamp, timestamp))
+            cursor.executemany(
+                "INSERT INTO rpt_station_hour_heatmap (batch_id, station_id, station_name, hour, metric, value, is_observed, data_date, data_version, generated_at, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
         else:
-            raise AdsV21ImportError(f"unsupported A0 dataset: {dataset_code}")
+            raise AdsV21ImportError(f"unsupported ADS dataset: {dataset_code}")
 
     @staticmethod
     def _source_date(rows: tuple[dict[str, str], ...]) -> date:
@@ -192,6 +251,19 @@ class AdsV21A0Importer:
             return max(date.fromisoformat(row["stat_date"]) for row in rows)
         except (KeyError, ValueError) as exc:
             raise AdsV21ImportError("fee_energy_daily contains invalid stat_date") from exc
+
+    @staticmethod
+    def _source_start_date(rows: tuple[dict[str, str], ...]) -> date:
+        try:
+            return min(date.fromisoformat(row["stat_date"]) for row in rows)
+        except (KeyError, ValueError) as exc:
+            raise AdsV21ImportError("fee_energy_daily contains invalid stat_date") from exc
+
+
+class AdsV21WaveBImporter(AdsV21A0Importer):
+    """Publish only the Wave B datasets from the same verified package."""
+
+    DATASETS = WAVE_B_DATASETS
 
 
 def _batch_id(source_batch_id: str, dataset_code: str) -> str:
@@ -212,6 +284,13 @@ def _integer(value: str) -> int:
 
 def _decimal(value: str) -> str:
     return format(_decimal_value(value), "f")
+
+
+def _ratio(value: str) -> str:
+    decimal = _decimal_value(value)
+    if not Decimal("0") <= decimal <= Decimal("100"):
+        raise AdsV21ImportError(f"ratio must be between 0 and 100: {value}")
+    return format(decimal / Decimal("100"), "f")
 
 
 def _decimal_value(value: str) -> Decimal:

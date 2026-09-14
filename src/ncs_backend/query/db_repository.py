@@ -73,10 +73,10 @@ class DbApiDashboardRepository:
             return {"topic": topic, "regions": [], "stations": [], "dateRange": None}
 
         stations: list[dict[str, Any]] = []
-        if resource == "ranking":
+        if resource in {"ranking", "heatmap"}:
             try:
                 station_rows = self._query(
-                    "SELECT station_id, station_name, region_id FROM api_v1_station_ranking ORDER BY station_id",
+                    f"SELECT DISTINCT station_id, station_name, region_id FROM {self.VIEW_BY_RESOURCE[resource]} ORDER BY station_id",
                     (),
                 )
             except Exception:
@@ -89,7 +89,7 @@ class DbApiDashboardRepository:
         date_range = None
         if resource in self.VIEW_BY_RESOURCE:
             view = self.VIEW_BY_RESOURCE[resource]
-            date_column = "period_start" if resource == "fee_energy_trend" else "data_date"
+            date_column = "period_start" if resource == "fee_energy_trend" else "start_date" if resource == "weekday_weekend" else "data_date"
             try:
                 row = self._query(
                     f"SELECT MIN({date_column}) AS min_date, MAX({date_column}) AS max_date FROM {view}",
@@ -236,8 +236,8 @@ class DbApiDashboardRepository:
 
     def _fetch_heatmap(self, params: Mapping[str, Any]) -> QueryPayload:
         metric = params.get("metric", "kwh")
-        where = ["data_date = COALESCE(?, (SELECT MAX(data_date) FROM api_v1_station_hour_heatmap))", "metric = ?"]
-        values: list[Any] = [params.get("dataDate"), metric]
+        where = ["(data_date IS NULL OR data_date = (SELECT MAX(data_date) FROM api_v1_station_hour_heatmap))", "metric = ?"]
+        values: list[Any] = [metric]
         if params.get("regionId") is not None:
             where.append("region_id = ?")
             values.append(params["regionId"])

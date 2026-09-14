@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from ncs_backend.admin.adapters.ads_v21_import import AdsV21A0Importer, AdsV21ImportError
+from ncs_backend.admin.adapters.ads_v21_import import AdsV21A0Importer, AdsV21ImportError, AdsV21WaveBImporter
 from ncs_backend.admin.adapters.ads_v21_package import AdsV21DatasetDescriptor, AdsV21PackageDescriptor
 from ncs_backend.admin.adapters.ads_v21_schema import ADS_V21_FILE_SPECS
 from ncs_backend.admin.local_database import initialize_local_database
@@ -34,6 +34,8 @@ def _fixture_package() -> tuple[AdsV21PackageDescriptor, _FakeReader]:
         "platform_distribution": (("platform", "android"), ("order_cnt", "1"), ("total_fees", "2"), ("fee_ratio", "100")),
         "order_daily": (("stat_date", "2015-12-28"), ("order_cnt", "1"), ("total_kwh", "3"), ("total_fees", "2"), ("total_charge_hours", "1"), ("user_cnt", "1")),
         "charging_duration_distribution": (("bucket_order", "1"), ("duration_bucket", "0-1h"), ("order_cnt", "1"), ("order_ratio", "100")),
+        "weekday_weekend_profile": (("day_type", "workday"), ("order_cnt", "1"), ("total_kwh", "3"), ("total_fees", "2"), ("avg_charge_hours", "1"), ("user_cnt", "1")),
+        "station_hour_heatmap_snapshot": (("station_id", "S1"), ("station_name", "站点1"), ("stat_hour", "0"), ("order_cnt", "1"), ("total_kwh", "3"), ("total_fees", "2")),
         "station_ranking_snapshot": (("station_id", "S1"), ("station_name", "站点1"), ("location_id", "L1"), ("order_cnt", "1"), ("total_fees", "2"), ("total_kwh", "3")),
         "charging_process_daily": (("stat_date", "2015-12-28"), ("record_cnt", "1"), ("session_cnt", "1"), ("avg_soc", "50"), ("max_soc", "80"), ("min_soc", "20"), ("avg_current", "10"), ("avg_pack_voltage", "400"), ("avg_max_temp", "30")),
     }
@@ -139,3 +141,34 @@ def test_configured_query_app_reads_published_ads_views(tmp_path):
     assert filters.json["data"]["stations"][0]["stationId"] == "S1"
     assert filters.json["data"]["dateRange"] == {"minDate": "2015-12-28", "maxDate": "2015-12-28"}
     assert filters.json["meta"]["empty"] is False
+
+
+def test_wave_b_importer_expands_snapshot_datasets(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    package, reader = _fixture_package()
+    importer = AdsV21WaveBImporter(lambda: sqlite3.connect(database), reader=reader)
+
+    assert importer.import_package(package) == (
+        "charging_duration_distribution",
+        "weekday_weekend_profile",
+        "station_hour_heatmap_snapshot",
+    )
+    client = configured_query_app(Settings(database_url=f"sqlite:///{database.as_posix()}"),).test_client()
+
+    duration = client.get("/api/v1/charging/duration-distribution")
+    profile = client.get("/api/v1/charging/weekday-weekend")
+    heatmap = client.get("/api/v1/charging/station-hour-heatmap")
+    dated_heatmap = client.get("/api/v1/charging/station-hour-heatmap?dataDate=2015-12-28")
+
+    assert [item["bucketCode"] for item in duration.json["data"]["items"]] == [
+        "PT0H_PT1H", "PT1H_PT2H", "PT2H_PT3H", "PT3H_PLUS",
+    ]
+    assert duration.json["data"]["items"][0]["ratio"] == "1"
+    assert profile.json["data"]["series"][0]["dayType"] == "WEEKDAY"
+    assert profile.json["data"]["series"][0]["rawValues"][0] == 1
+    assert heatmap.json["data"]["availability"] == "AVAILABLE"
+    assert len(heatmap.json["data"]["points"]) == 24
+    assert heatmap.json["data"]["points"][0]["isObserved"] is True
+    assert dated_heatmap.status_code == 400
+    assert dated_heatmap.json["code"] == "VALIDATION_UNSUPPORTED_FILTER"

@@ -89,6 +89,8 @@ class DashboardQueryService:
                 raise AppError("VALIDATION_INVALID_PARAMETER", "cutoffHour must be between 0 and 23", 400, {"field": "cutoffHour"})
         if resource == "heatmap" and params.get("metric", "kwh") not in {"kwh", "orders", "fees"}:
             raise AppError("VALIDATION_INVALID_PARAMETER", "metric is not supported for heatmap", 400, {"field": "metric"})
+        if resource == "heatmap" and "dataDate" in params:
+            raise AppError("VALIDATION_UNSUPPORTED_FILTER", "v2.1 heatmap is an all-history snapshot without a data date", 400, {"field": "dataDate"})
         if resource == "ranking" and params.get("metric", "fees") != "fees":
             raise AppError("VALIDATION_INVALID_PARAMETER", "V1 ranking metric must be fees", 400, {"field": "metric"})
         if resource == "fee_energy_trend" and params.get("granularity", "MONTH") not in {"HOUR", "DAY", "MONTH"}:
