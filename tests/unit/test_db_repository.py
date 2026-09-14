@@ -1,6 +1,7 @@
 import sqlite3
+from datetime import timezone
 
-from ncs_backend.query.db_repository import DbApiDashboardRepository
+from ncs_backend.query.db_repository import DbApiDashboardRepository, _datetime_value, _monthly_trend_rows
 
 
 def _repository(tmp_path):
@@ -96,6 +97,8 @@ def test_db_repository_fills_heatmap_hours_and_keeps_observation_flag(tmp_path):
         "isObserved": True,
     }
     assert result.data["points"][0]["isObserved"] is False
+    assert result.data["metricCode"] == "kwh"
+    assert result.data["valueRange"] == {"min": "0", "max": "12.50"}
 
 
 def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
@@ -109,3 +112,26 @@ def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
     assert len(prediction.data["actual"]) == 1
     assert prediction.data["actual"][0]["time"].endswith("15:00:00+08:00")
     assert len(prediction.data["forecast"]) == 1
+
+
+def test_mysql_naive_timestamp_is_serialized_as_utc():
+    value = _datetime_value("2026-09-14 09:06:27")
+
+    assert value is not None
+    assert value.tzinfo == timezone.utc
+    assert value.isoformat() == "2026-09-14T09:06:27+00:00"
+
+
+def test_daily_trend_rows_can_be_aggregated_for_month_view():
+    rows = [
+        {"period": "2026-08-31", "order_count": 2, "total_fees": "3.10", "total_kwh": "4.20"},
+        {"period": "2026-09-01", "order_count": 5, "total_fees": "6.30", "total_kwh": "7.40"},
+        {"period": "2026-09-02", "order_count": 7, "total_fees": "8.50", "total_kwh": "9.60"},
+    ]
+
+    monthly = _monthly_trend_rows(rows)
+
+    assert [(item["period"], item["order_count"], str(item["total_fees"])) for item in monthly] == [
+        ("2026-08", 2, "3.10"),
+        ("2026-09", 12, "14.80"),
+    ]

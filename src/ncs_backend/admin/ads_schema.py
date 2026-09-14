@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 6
+ADS_MIGRATION_VERSION = 7
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -481,6 +481,15 @@ ADS_MYSQL_VIEW_SQL = (
     FROM rpt_station_ranking r
     JOIN ctl_publication p ON p.dataset_code = 'station_ranking_snapshot'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, SUM(r.order_count) AS order_count,
+           SUM(r.total_fees) AS total_fees, SUM(r.total_kwh) AS total_kwh,
+           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at,
+           r.staleness, r.location_id AS region_id
+    FROM rpt_station_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.data_version, r.staleness, r.location_id
     """,
     """
     CREATE VIEW api_v1_process_summary AS

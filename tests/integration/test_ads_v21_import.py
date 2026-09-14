@@ -148,7 +148,10 @@ def test_configured_query_app_reads_published_ads_views(tmp_path):
     filters = client.get("/api/v1/meta/filter-options?topic=stationRanking")
 
     assert overview.status_code == 200
-    assert len(overview.json["data"]["items"]) == 7
+    assert {item["metricCode"] for item in overview.json["data"]["items"]} == {
+        "total_order_count", "total_charging_energy", "total_charging_fee",
+        "total_user_count", "active_station_count",
+    }
     assert trend.json["data"]["granularity"] == "MONTH"
     assert len(trend.json["data"]["points"]) == 1
     assert status.json["data"]["qualityStatus"] == "PASSED"

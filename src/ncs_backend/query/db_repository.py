@@ -8,7 +8,7 @@ is allowed to see published views only.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -140,16 +140,25 @@ class DbApiDashboardRepository:
             """,
             values,
         )
-        mapped_items = [
-            {
-                "metricCode": row.get("metric_code"),
+        aliases = {"total_fees": "total_charging_fee", "total_kwh": "total_charging_energy"}
+        accepted = {"total_order_count", "total_charging_fee", "total_charging_energy", "total_user_count", "active_station_count"}
+        has_active_station = any(row.get("metric_code") == "active_station_count" for row in rows)
+        mapped_items = []
+        for row in rows:
+            source_code = row.get("metric_code")
+            code = aliases.get(source_code, source_code)
+            if source_code == "total_station_count" and not has_active_station:
+                code = "active_station_count"
+            if code not in accepted:
+                continue
+            mapped_items.append({
+                "metricCode": code,
                 "displayName": row.get("display_name"),
                 "value": _metric_value(row.get("metric_value"), row.get("unit")),
                 "unit": row.get("unit"),
                 "precision": _integer(row.get("precision")),
-            }
-            for row in rows
-        ]
+            })
+        mapped_items.sort(key=lambda item: item["metricCode"])
         return self._payload({"items": mapped_items}, rows)
 
     def _fetch_platform(self, params: Mapping[str, Any]) -> QueryPayload:
@@ -191,7 +200,7 @@ class DbApiDashboardRepository:
         )
         items = [
             {
-                "bucketCode": row.get("bucket_code"),
+                "bucketCode": _duration_bucket_code(row.get("bucket_code"), row.get("label")),
                 "label": row.get("label"),
                 "lowerMinutes": _integer(row.get("lower_minutes")),
                 "upperMinutes": _integer(row.get("upper_minutes")) if row.get("upper_minutes") is not None else None,
@@ -200,6 +209,8 @@ class DbApiDashboardRepository:
             }
             for row in rows
         ]
+        if not rows:
+            return self._payload({"subject": "ORDER", "unit": "count", "items": []}, rows)
         by_code = {item["bucketCode"]: item for item in items}
         items = []
         for item in _duration_defaults():
@@ -278,11 +289,11 @@ class DbApiDashboardRepository:
                     {
                         "stationId": station_id,
                         "hour": hour,
-                        "value": _decimal_text(row.get("value")) if row is not None else "0",
+                        "value": _heatmap_value(row.get("value"), metric) if row is not None else (0 if metric == "orders" else "0"),
                         "isObserved": _bool(row.get("is_observed")) if row is not None else False,
                     }
                 )
-        values_for_range = [row.get("value") for row in rows if row.get("station_id") in selected and row.get("value") is not None]
+        values_for_range = [point["value"] for point in points]
         metric_code = _metric_code(rows[0].get("metric_code") if rows else None, metric)
         unit = rows[0].get("unit") if rows else _heatmap_unit(metric)
         data = {
@@ -296,11 +307,11 @@ class DbApiDashboardRepository:
             ],
             "points": points,
             "valueRange": {
-                "min": _decimal_text(min(values_for_range)),
-                "max": _decimal_text(max(values_for_range)),
+                "min": _heatmap_value(min(Decimal(str(value)) for value in values_for_range), metric),
+                "max": _heatmap_value(max(Decimal(str(value)) for value in values_for_range), metric),
             }
             if values_for_range
-            else None,
+            else {"min": None, "max": None},
         }
         return self._payload(data, rows)
 
@@ -336,10 +347,13 @@ class DbApiDashboardRepository:
             key = row.get("metric_key")
             indicator_rows.setdefault(key, row)
             series_rows.setdefault(row.get("day_type"), {})[key] = row
+        if not rows:
+            return self._payload({"indicators": [], "series": [], "normalization": None}, rows)
+        source_indicator_keys = list(indicator_rows)
         indicators = [
             {
-                "key": key,
-                "label": row.get("label"),
+                "metricCode": _profile_metric_code(key),
+                "displayName": row.get("label"),
                 "unit": row.get("unit"),
                 "max": _decimal_text(row.get("max_value")),
             }
@@ -347,16 +361,17 @@ class DbApiDashboardRepository:
         ]
         if not indicators:
             indicators = _profile_indicator_defaults()
-        indicator_keys = [indicator["key"] for indicator in indicators]
+            source_indicator_keys = [indicator["metricCode"] for indicator in indicators]
         series = []
         for day_type in ("WEEKDAY", "WEEKEND"):
             day_rows = series_rows.get(day_type, {})
             series.append(
                 {
                     "dayType": day_type,
-                    "rawValues": [_metric_value(day_rows[key].get("raw_value"), next((item["unit"] for item in indicators if item["key"] == key), None)) if key in day_rows else None for key in indicator_keys],
-                    "normalizedValues": [_decimal_text(day_rows[key].get("normalized_value")) for key in indicator_keys]
-                    if day_rows and all(key in day_rows and day_rows[key].get("normalized_value") is not None for key in indicator_keys)
+                    "displayName": "工作日" if day_type == "WEEKDAY" else "周末",
+                    "rawValues": [_metric_value(day_rows[key].get("raw_value"), indicators[index]["unit"]) if key in day_rows else None for index, key in enumerate(source_indicator_keys)],
+                    "normalizedValues": [_decimal_text(day_rows[key].get("normalized_value")) for key in source_indicator_keys]
+                    if day_rows and all(key in day_rows and day_rows[key].get("normalized_value") is not None for key in source_indicator_keys)
                     else None,
                 }
             )
@@ -449,6 +464,18 @@ class DbApiDashboardRepository:
             """,
             (granularity, *values),
         )
+        if not rows and granularity == "MONTH":
+            daily_rows = self._query(
+                f"""
+                SELECT period, order_count, total_fees, total_kwh,
+                       data_date, data_version, generated_at, staleness
+                FROM api_v1_fee_energy_trend
+                WHERE granularity = 'DAY' AND {' AND '.join(where)}
+                ORDER BY period
+                """,
+                values,
+            )
+            rows = _monthly_trend_rows(daily_rows)
         points = [
             {
                 "period": row.get("period"),
@@ -458,7 +485,7 @@ class DbApiDashboardRepository:
             }
             for row in rows
         ]
-        return self._payload({"granularity": granularity, "points": points, "units": {"totalFees": "CNY", "totalKwh": "kWh"}}, rows)
+        return self._payload({"granularity": granularity, "points": points, "units": {"fees": "CNY", "energy": "kWh", "orders": "count"}}, rows)
 
     def _fetch_process_summary(self, params: Mapping[str, Any]) -> QueryPayload:
         where, values = _range_filter("data_date", params, "api_v1_process_summary", include_station=True)
@@ -477,28 +504,23 @@ class DbApiDashboardRepository:
         if not rows:
             return QueryPayload(
                 data={
-                    "scope": {"type": "ALL_STATIONS", "stationId": None, "startDate": None, "endDate": None},
+                    "scope": "ALL_STATIONS",
                     "recordCount": 0,
                     "sessionCount": 0,
-                    "metrics": _process_metric_defaults(),
+                    "metrics": [],
                 }
             )
         row = rows[0]
         return self._payload(
             {
-                "scope": {
-                    "type": row.get("scope_type") or "ALL_STATIONS",
-                    "stationId": row.get("station_id"),
-                    "startDate": _date_text(row.get("start_date")),
-                    "endDate": _date_text(row.get("end_date")),
-                },
+                "scope": row.get("scope_type") or "ALL_STATIONS",
                 "recordCount": _integer(row.get("record_count")),
                 "sessionCount": _integer(row.get("session_count")),
                 "metrics": [
-                    {"metricCode": "average_soc", "value": _decimal_text(row.get("average_soc")), "unit": "ratio", "precision": 3},
-                    {"metricCode": "average_current", "value": _decimal_text(row.get("average_current")), "unit": "A", "precision": 1},
-                    {"metricCode": "average_voltage", "value": _decimal_text(row.get("average_voltage")), "unit": "V", "precision": 1},
-                    {"metricCode": "average_max_temperature", "value": _decimal_text(row.get("average_max_temperature")), "unit": "celsius", "precision": 1},
+                    {"metricCode": "average_soc", "displayName": "平均 SOC", "value": _soc_ratio(row.get("average_soc")), "unit": "ratio", "precision": 3},
+                    {"metricCode": "average_current", "displayName": "平均电流", "value": _decimal_text(row.get("average_current")), "unit": "A", "precision": 1},
+                    {"metricCode": "average_voltage", "displayName": "平均电压", "value": _decimal_text(row.get("average_voltage")), "unit": "V", "precision": 1},
+                    {"metricCode": "average_max_temperature", "displayName": "平均峰值温度", "value": _decimal_text(row.get("average_max_temperature")), "unit": "celsius", "precision": 1},
                 ],
             },
             rows,
@@ -600,13 +622,60 @@ def _bool(value: Any) -> bool:
 
 
 def _metric_code(value: Any, metric: str) -> str:
-    if value:
-        return str(value)
-    return {"kwh": "charging_energy", "orders": "order_count", "fees": "total_fees"}.get(metric, metric)
+    aliases = {"charging_energy": "kwh", "order_count": "orders", "total_fees": "fees"}
+    return aliases.get(str(value), metric)
+
+
+def _heatmap_value(value: Any, metric: str) -> int | str:
+    if metric == "orders":
+        return _integer(value)
+    return _decimal_text(value) or "0"
 
 
 def _heatmap_unit(metric: str) -> str:
     return {"kwh": "kWh", "orders": "count", "fees": "CNY"}.get(metric, "kWh")
+
+
+def _duration_bucket_code(code: Any, label: Any) -> str:
+    canonical = {item["label"]: item["bucketCode"] for item in _duration_defaults()}
+    return canonical.get(str(label), str(code))
+
+
+def _profile_metric_code(value: Any) -> str:
+    return {
+        "total_fees": "charging_fee",
+        "average_charge_hours": "avg_duration",
+    }.get(str(value), str(value))
+
+
+def _soc_ratio(value: Any) -> str | None:
+    if value is None:
+        return None
+    decimal = Decimal(str(value))
+    if decimal > 1:
+        decimal /= Decimal("100")
+    return format(decimal, "f")
+
+
+def _monthly_trend_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        month = str(row.get("period", ""))[:7]
+        item = grouped.setdefault(month, {
+            "period": month,
+            "order_count": 0,
+            "total_fees": Decimal("0"),
+            "total_kwh": Decimal("0"),
+            "data_date": row.get("data_date"),
+            "data_version": row.get("data_version"),
+            "generated_at": row.get("generated_at"),
+            "staleness": row.get("staleness"),
+        })
+        item["order_count"] += int(row.get("order_count") or 0)
+        item["total_fees"] += Decimal(str(row.get("total_fees") or 0))
+        item["total_kwh"] += Decimal(str(row.get("total_kwh") or 0))
+        item["data_date"] = row.get("data_date")
+    return list(grouped.values())
 
 
 def _duration_defaults() -> list[dict[str, Any]]:
@@ -620,20 +689,20 @@ def _duration_defaults() -> list[dict[str, Any]]:
 
 def _profile_indicator_defaults() -> list[dict[str, Any]]:
     return [
-        {"key": "order_count", "label": "订单量", "unit": "count", "max": None},
-        {"key": "charging_energy", "label": "充电量", "unit": "kWh", "max": None},
-        {"key": "total_fees", "label": "费用", "unit": "CNY", "max": None},
-        {"key": "user_count", "label": "用户数", "unit": "count", "max": None},
-        {"key": "average_charge_hours", "label": "平均时长", "unit": "hour", "max": None},
+        {"metricCode": "order_count", "displayName": "订单量", "unit": "count", "max": None},
+        {"metricCode": "charging_energy", "displayName": "充电量", "unit": "kWh", "max": None},
+        {"metricCode": "charging_fee", "displayName": "费用", "unit": "CNY", "max": None},
+        {"metricCode": "user_count", "displayName": "用户数", "unit": "count", "max": None},
+        {"metricCode": "avg_duration", "displayName": "平均时长", "unit": "hour", "max": None},
     ]
 
 
 def _process_metric_defaults() -> list[dict[str, Any]]:
     return [
-        {"metricCode": "average_soc", "value": None, "unit": "ratio", "precision": 3},
-        {"metricCode": "average_current", "value": None, "unit": "A", "precision": 1},
-        {"metricCode": "average_voltage", "value": None, "unit": "V", "precision": 1},
-        {"metricCode": "average_max_temperature", "value": None, "unit": "celsius", "precision": 1},
+        {"metricCode": "average_soc", "displayName": "平均 SOC", "value": None, "unit": "ratio", "precision": 3},
+        {"metricCode": "average_current", "displayName": "平均电流", "value": None, "unit": "A", "precision": 1},
+        {"metricCode": "average_voltage", "displayName": "平均电压", "value": None, "unit": "V", "precision": 1},
+        {"metricCode": "average_max_temperature", "displayName": "平均峰值温度", "value": None, "unit": "celsius", "precision": 1},
     ]
 
 
@@ -651,9 +720,10 @@ def _date_text(value: Any) -> str | None:
 
 
 def _datetime_value(value: Any) -> datetime | None:
-    if value is None or isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(str(value))
+    if value is None:
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
 def _datetime_text(value: Any) -> str | None:
