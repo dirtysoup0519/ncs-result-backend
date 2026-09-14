@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from collections.abc import Mapping
+import hashlib
 from hmac import compare_digest
+import json
 from typing import Any
 
 from flask import Flask, g, jsonify, make_response, request
@@ -18,7 +20,7 @@ from ncs_backend.shared.observability import install_request_context
 
 # ETags identify the serialized API representation, not only the ADS data.
 # Increment this revision whenever a response DTO changes without a data reload.
-QUERY_REPRESENTATION_REVISION = "api-v1-r2"
+QUERY_REPRESENTATION_REVISION = "api-v1-r3"
 
 
 def create_app(
@@ -62,24 +64,30 @@ def create_app(
         return response
 
     def envelope(payload: QueryPayload):
-        response = jsonify(
-            {
-                "code": "OK",
-                "message": "ok",
-                "data": _json_value(payload.data),
-                "meta": {
-                    "requestId": g.get("trace_id"),
-                    "dataVersion": payload.data_version,
-                    "dataDate": _json_value(payload.data_date),
-                    "generatedAt": _json_value(payload.generated_at),
-                    "staleness": payload.staleness,
-                    "empty": payload.empty,
-                    "partial": payload.partial,
-                },
-            }
-        )
+        data = _json_value(payload.data)
+        stable_meta = {
+            "dataVersion": payload.data_version,
+            "dataDate": _json_value(payload.data_date),
+            "generatedAt": _json_value(payload.generated_at),
+            "staleness": payload.staleness,
+            "empty": payload.empty,
+            "partial": payload.partial,
+        }
+        response = jsonify({
+            "code": "OK",
+            "message": "ok",
+            "data": data,
+            "meta": {"requestId": g.get("trace_id"), **stable_meta},
+        })
         if payload.data_version:
-            etag = f'"{payload.data_version}:{QUERY_REPRESENTATION_REVISION}"'
+            representation = json.dumps(
+                {"data": data, "meta": stable_meta},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            digest = hashlib.sha256(representation).hexdigest()[:24]
+            etag = f'"{QUERY_REPRESENTATION_REVISION}:{digest}"'
             response.headers["ETag"] = etag
             response.headers["Cache-Control"] = "no-cache"
             if request.headers.get("If-None-Match") == etag:
