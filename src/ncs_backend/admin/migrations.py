@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+import hashlib
 from typing import Any
 
 CONTROL_TABLES = (
@@ -15,6 +17,17 @@ CONTROL_TABLES = (
 )
 
 STAGING_TABLES = ("stg_import_row",)
+
+MIGRATION_TABLE = "ctl_schema_migration"
+
+MIGRATION_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS ctl_schema_migration (
+    version INTEGER PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    checksum VARCHAR(64) NOT NULL,
+    applied_at TIMESTAMP NOT NULL
+)
+"""
 
 CONTROL_SCHEMA_SQL = (
     """
@@ -110,6 +123,81 @@ STAGING_SCHEMA_SQL = (
     )
     """,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Migration:
+    version: int
+    name: str
+    statements: tuple[str, ...]
+
+    @property
+    def checksum(self) -> str:
+        payload = "\n".join(statement.strip() for statement in self.statements).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationResult:
+    applied: tuple[int, ...]
+    skipped: tuple[int, ...]
+
+
+DEFAULT_MIGRATIONS = (
+    Migration(1, "control-schema", tuple(CONTROL_SCHEMA_SQL)),
+    Migration(2, "staging-schema", tuple(STAGING_SCHEMA_SQL)),
+)
+
+
+class MigrationError(RuntimeError):
+    """Raised when migration history is inconsistent or cannot be applied."""
+
+
+class MigrationRunner:
+    """Apply ordered, checksummed DB-API migrations."""
+
+    def __init__(self, migrations: Iterable[Migration] = DEFAULT_MIGRATIONS, *, placeholder: str = "?") -> None:
+        ordered = tuple(sorted(migrations, key=lambda item: item.version))
+        versions = [item.version for item in ordered]
+        if len(set(versions)) != len(versions) or any(version <= 0 for version in versions):
+            raise ValueError("migration versions must be unique positive integers")
+        self._migrations = ordered
+        self._placeholder = placeholder
+
+    def apply(self, connection: Any) -> MigrationResult:
+        cursor = connection.cursor()
+        applied: list[int] = []
+        skipped: list[int] = []
+        try:
+            cursor.execute(MIGRATION_SCHEMA_SQL)
+            rows = cursor.execute(
+                "SELECT version, checksum FROM ctl_schema_migration"
+            ).fetchall()
+            history = {int(version): checksum for version, checksum in rows}
+            for migration in self._migrations:
+                previous = history.get(migration.version)
+                if previous is not None:
+                    if previous != migration.checksum:
+                        raise MigrationError(
+                            f"migration checksum mismatch: v{migration.version} {migration.name}"
+                        )
+                    skipped.append(migration.version)
+                    continue
+                for statement in migration.statements:
+                    cursor.execute(statement)
+                cursor.execute(
+                    "INSERT INTO ctl_schema_migration "
+                    f"(version, name, checksum, applied_at) VALUES ({self._placeholder}, {self._placeholder}, {self._placeholder}, CURRENT_TIMESTAMP)",
+                    (migration.version, migration.name, migration.checksum),
+                )
+                applied.append(migration.version)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            cursor.close()
+        return MigrationResult(tuple(applied), tuple(skipped))
 
 
 def initialize_control_schema(connection: Any, statements: Iterable[str] = CONTROL_SCHEMA_SQL) -> tuple[str, ...]:

@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from ncs_backend.admin.migrations import initialize_control_schema, initialize_staging_schema
+from ncs_backend.admin.migrations import MigrationRunner, initialize_control_schema, initialize_staging_schema
 from ncs_backend.admin.importers import DeliveryValidator
 
 
@@ -23,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
     staging = subparsers.add_parser("init-staging-schema", help="initialize the local staging schema")
     staging.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
+    migrate = subparsers.add_parser("migrate", help="apply versioned control and staging migrations")
+    migrate.add_argument("--sqlite", type=Path, required=True, help="SQLite database file for local development")
     return parser
 
 
@@ -57,6 +59,27 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             connection.close()
         print(json.dumps({"initialized": True, "database": str(args.sqlite), "tables": list(tables)}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "migrate":
+        args.sqlite.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(args.sqlite)
+        try:
+            result = MigrationRunner().apply(connection)
+        finally:
+            connection.close()
+        print(
+            json.dumps(
+                {
+                    "migrated": True,
+                    "database": str(args.sqlite),
+                    "appliedVersions": list(result.applied),
+                    "skippedVersions": list(result.skipped),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     result = validate_delivery(args.schema, args.manifest, args.data)

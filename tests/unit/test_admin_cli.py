@@ -71,3 +71,18 @@ def test_staging_schema_initialization_is_idempotent(tmp_path, capsys):
     connection.close()
     assert "stg_import_row" in tables
     assert '"initialized": true' in capsys.readouterr().out
+
+
+def test_versioned_migrations_are_idempotent_and_recorded(tmp_path, capsys):
+    database = tmp_path / "migrated.sqlite"
+
+    assert main(["migrate", "--sqlite", str(database)]) == 0
+    assert main(["migrate", "--sqlite", str(database)]) == 0
+
+    connection = sqlite3.connect(database)
+    migrations = connection.execute(
+        "SELECT version, name FROM ctl_schema_migration ORDER BY version"
+    ).fetchall()
+    connection.close()
+    assert migrations == [(1, "control-schema"), (2, "staging-schema")]
+    assert '"appliedVersions": []' in capsys.readouterr().out
