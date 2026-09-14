@@ -10,6 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
+ADS_MIGRATION_VERSION = 2
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -100,7 +101,7 @@ ADS_SCHEMA_SQL = (
         batch_id VARCHAR(128) NOT NULL,
         data_date DATE NOT NULL,
         scope_type VARCHAR(32) NOT NULL,
-        station_id VARCHAR(64),
+        station_id VARCHAR(64) NOT NULL DEFAULT '',
         start_date DATE,
         end_date DATE,
         record_count BIGINT NOT NULL,
@@ -161,7 +162,7 @@ ADS_VIEW_SQL = (
            r.period_start, r.data_date, r.data_version, r.generated_at,
            r.staleness, r.region_id, r.station_id
     FROM rpt_fee_energy_trend r
-    JOIN ctl_publication p ON p.dataset_code = 'fee_energy_daily'
+    JOIN ctl_publication p ON p.dataset_code IN ('fee_energy_daily', 'fee_energy_monthly')
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
     """
@@ -175,7 +176,7 @@ ADS_VIEW_SQL = (
     """,
     """
     CREATE VIEW IF NOT EXISTS api_v1_process_summary AS
-    SELECT r.scope_type, r.station_id, r.start_date, r.end_date,
+    SELECT r.scope_type, NULLIF(r.station_id, '') AS station_id, r.start_date, r.end_date,
            r.record_count, r.session_count, r.average_soc, r.average_current,
            r.average_voltage, r.average_max_temperature, r.data_date,
            r.data_version, r.generated_at, r.staleness
@@ -183,6 +184,12 @@ ADS_VIEW_SQL = (
     JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
+)
+
+ADS_SCHEMA_STATEMENTS = (
+    *ADS_SCHEMA_SQL,
+    *(f"DROP VIEW IF EXISTS {view_name}" for view_name in ADS_VIEW_NAMES),
+    *ADS_VIEW_SQL,
 )
 
 
@@ -201,7 +208,7 @@ def initialize_ads_result_schema(
     connection: Any,
     *,
     dialect: DatabaseDialect = SQLITE_DIALECT,
-    schema_sql: Iterable[str] = (*ADS_SCHEMA_SQL, *ADS_VIEW_SQL),
+    schema_sql: Iterable[str] = ADS_SCHEMA_STATEMENTS,
 ) -> AdsSchemaResult:
     """Create A0 tables/views atomically and record a checksummed schema version."""
 
@@ -212,7 +219,10 @@ def initialize_ads_result_schema(
         cursor.execute(
             f"CREATE TABLE IF NOT EXISTS {ADS_MIGRATION_TABLE} (version INTEGER PRIMARY KEY, checksum VARCHAR(64) NOT NULL, applied_at TIMESTAMP NOT NULL)"
         )
-        rows = cursor.execute(f"SELECT checksum FROM {ADS_MIGRATION_TABLE} WHERE version = ?", (1,)).fetchall()
+        rows = cursor.execute(
+            f"SELECT checksum FROM {ADS_MIGRATION_TABLE} WHERE version = ?",
+            (ADS_MIGRATION_VERSION,),
+        ).fetchall()
         if rows and str(rows[0][0]) != checksum:
             raise AdsSchemaMigrationError("ADS schema checksum mismatch")
         if not rows:
@@ -220,7 +230,7 @@ def initialize_ads_result_schema(
                 cursor.execute(statement)
             cursor.execute(
                 f"INSERT INTO {ADS_MIGRATION_TABLE} (version, checksum, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                (1, checksum),
+                (ADS_MIGRATION_VERSION, checksum),
             )
             applied = True
         else:
