@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from ncs_backend.query.repository import EmptyDashboardRepository, QueryPayload
+from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 
 ConnectionFactory = Callable[[], Any]
@@ -34,9 +35,10 @@ class DbApiDashboardRepository:
         "prediction": "api_v1_load_prediction",
     }
 
-    def __init__(self, connection_factory: ConnectionFactory) -> None:
+    def __init__(self, connection_factory: ConnectionFactory, *, dialect: DatabaseDialect = SQLITE_DIALECT) -> None:
         self._connection_factory = connection_factory
         self._empty = EmptyDashboardRepository()
+        self._dialect = dialect
 
     def fetch(self, resource: str, params: Mapping[str, Any]) -> QueryPayload:
         method = getattr(self, f"_fetch_{resource}", None)
@@ -471,7 +473,7 @@ class DbApiDashboardRepository:
     def _query(self, sql: str, parameters: Sequence[Any]) -> list[dict[str, Any]]:
         connection = self._connection_factory()
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(sql, tuple(parameters))
             description = cursor.description or ()
             columns = [column[0] for column in description]

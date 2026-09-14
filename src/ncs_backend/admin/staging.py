@@ -9,6 +9,7 @@ from hashlib import sha256
 from typing import Any, Protocol
 
 from ncs_backend.shared.domain.identifiers import BatchId
+from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ConnectionFactory = Callable[[], Any]
 
@@ -26,9 +27,16 @@ class StagingWriter(Protocol):
 class DbApiStagingWriter:
     """Idempotent DB-API writer for the schema-neutral ``stg_import_row`` table."""
 
-    def __init__(self, connection_factory: ConnectionFactory, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        connection_factory: ConnectionFactory,
+        clock: Callable[[], datetime] | None = None,
+        *,
+        dialect: DatabaseDialect = SQLITE_DIALECT,
+    ) -> None:
         self._connection_factory = connection_factory
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._dialect = dialect
 
     def write(self, batch_id: BatchId, rows: Iterable[Mapping[str, Any]]) -> int:
         materialized = tuple(dict(row) for row in rows)
@@ -36,7 +44,7 @@ class DbApiStagingWriter:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 SELECT row_number, payload_json, row_sha256
@@ -83,7 +91,7 @@ class DbApiStagingWriter:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 SELECT payload_json

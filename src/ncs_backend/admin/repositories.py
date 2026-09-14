@@ -1,9 +1,8 @@
 """DB-API repositories for the control-plane batch and publication records.
 
 The repository deliberately exposes business operations instead of accepting
-arbitrary table names or SQL from callers.  The first adapter targets the
-standard ``qmark`` DB-API style used by SQLite; a later MySQL adapter can keep
-the same port and only change the connection/placeholder details.
+arbitrary table names or SQL from callers. SQL templates use qmark style and
+are translated by the configured database dialect at the cursor boundary.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from uuid import uuid4
 
 from ncs_backend.shared.domain.enums import BatchStatus
 from ncs_backend.shared.domain.identifiers import BatchId, DatasetCode, SchemaVersion
+from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ConnectionFactory = Callable[[], Any]
 
@@ -178,8 +178,9 @@ class ControlRepositoryError(RuntimeError):
 class DbApiControlRepository:
     """Control-plane repository backed by a DB-API 2.0 connection factory."""
 
-    def __init__(self, connection_factory: ConnectionFactory) -> None:
+    def __init__(self, connection_factory: ConnectionFactory, *, dialect: DatabaseDialect = SQLITE_DIALECT) -> None:
         self._connection_factory = connection_factory
+        self._dialect = dialect
 
     def list_datasets(self) -> tuple[DatasetRecord, ...]:
         rows = self._query(
@@ -209,7 +210,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 INSERT INTO ctl_dataset (
@@ -247,7 +248,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 UPDATE ctl_dataset
@@ -307,7 +308,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 INSERT INTO ctl_schema_version (
@@ -391,7 +392,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 INSERT INTO ctl_import_batch (
@@ -438,7 +439,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 UPDATE ctl_import_batch
@@ -484,7 +485,7 @@ class DbApiControlRepository:
         """Publish a READY batch and move the previous pointer atomically."""
 
         connection = self._connection_factory()
-        cursor = connection.cursor()
+        cursor = self._dialect.cursor(connection)
         try:
             batch_row = _fetch_one(
                 cursor,
@@ -618,7 +619,7 @@ class DbApiControlRepository:
         """Move the dataset pointer to an existing historical publication."""
 
         connection = self._connection_factory()
-        cursor = connection.cursor()
+        cursor = self._dialect.cursor(connection)
         try:
             current = _fetch_one(
                 cursor,
@@ -782,7 +783,7 @@ class DbApiControlRepository:
         connection = self._connection_factory()
         cursor = None
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
                 INSERT INTO ctl_quality_result (
@@ -859,7 +860,7 @@ class DbApiControlRepository:
     def _query(self, sql: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
         connection = self._connection_factory()
         try:
-            cursor = connection.cursor()
+            cursor = self._dialect.cursor(connection)
             cursor.execute(sql, parameters)
             columns = [column[0] for column in cursor.description or ()]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]

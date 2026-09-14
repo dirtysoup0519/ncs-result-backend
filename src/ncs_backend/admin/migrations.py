@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any
 
+from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
+
 CONTROL_TABLES = (
     "ctl_dataset",
     "ctl_schema_version",
@@ -156,16 +158,21 @@ class MigrationError(RuntimeError):
 class MigrationRunner:
     """Apply ordered, checksummed DB-API migrations."""
 
-    def __init__(self, migrations: Iterable[Migration] = DEFAULT_MIGRATIONS, *, placeholder: str = "?") -> None:
+    def __init__(
+        self,
+        migrations: Iterable[Migration] = DEFAULT_MIGRATIONS,
+        *,
+        dialect: DatabaseDialect = SQLITE_DIALECT,
+    ) -> None:
         ordered = tuple(sorted(migrations, key=lambda item: item.version))
         versions = [item.version for item in ordered]
         if len(set(versions)) != len(versions) or any(version <= 0 for version in versions):
             raise ValueError("migration versions must be unique positive integers")
         self._migrations = ordered
-        self._placeholder = placeholder
+        self._dialect = dialect
 
     def apply(self, connection: Any) -> MigrationResult:
-        cursor = connection.cursor()
+        cursor = self._dialect.cursor(connection)
         applied: list[int] = []
         skipped: list[int] = []
         try:
@@ -187,7 +194,7 @@ class MigrationRunner:
                     cursor.execute(statement)
                 cursor.execute(
                     "INSERT INTO ctl_schema_migration "
-                    f"(version, name, checksum, applied_at) VALUES ({self._placeholder}, {self._placeholder}, {self._placeholder}, CURRENT_TIMESTAMP)",
+                    "(version, name, checksum, applied_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                     (migration.version, migration.name, migration.checksum),
                 )
                 applied.append(migration.version)
