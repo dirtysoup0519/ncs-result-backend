@@ -38,6 +38,7 @@ def create_app(
     ads_v21_import_service: Any | None = None,
     ads_v23_import_service: Any | None = None,
     prediction_service: Any | None = None,
+    result_query_service: Any | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["NCS_SETTINGS"] = settings or Settings.from_env()
@@ -49,6 +50,7 @@ def create_app(
         "ads_v21_import": ads_v21_import_service,
         "ads_v23_import": ads_v23_import_service,
         "prediction": prediction_service,
+        "result_query": result_query_service,
     }
     install_request_context(app)
 
@@ -129,6 +131,35 @@ def create_app(
         if any(services().get(name) is None for name in ("registry", "batch", "quality", "publication")):
             return jsonify({"code": "DEPENDENCY_NOT_READY", "message": "admin service dependencies are not configured"}), 503
         return jsonify({"code": "OK", "message": "ok", "data": {"status": "ready"}})
+
+    # --------------------------------------------------- ADS result inspection
+
+    @app.get("/internal/v1/ads-result/tables")
+    def list_result_tables():
+        summaries = require("result_query").list_tables()
+        return success({"items": [{"table": item.name, "rowCount": item.row_count} for item in summaries]})
+
+    @app.get("/internal/v1/ads-result/tables/<table_name>/rows")
+    def browse_result_table(table_name: str):
+        args = request.args
+        try:
+            limit = int(args.get("limit", "50"))
+            offset = int(args.get("offset", "0"))
+        except ValueError as exc:
+            raise AppError("VALIDATION_INVALID_PARAMETER", "limit and offset must be integers", 400) from exc
+        order_by = args.get("order_by")
+        descending = args.get("direction", "asc").lower() == "desc"
+        try:
+            result = require("result_query").browse(
+                table_name,
+                limit=limit,
+                offset=offset,
+                order_by=order_by,
+                descending=descending,
+            )
+        except ValueError as exc:
+            raise AppError("VALIDATION_INVALID_PARAMETER", str(exc), 400) from exc
+        return success(result)
 
     @app.post("/internal/v1/datasets")
     def register_dataset():
