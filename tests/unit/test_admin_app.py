@@ -42,6 +42,17 @@ class _FakeAdsImportService:
         return AdsV21ImportResult("ads-batch", "v2.1", tuple(waves), ("dashboard_overview",))
 
 
+class _FakeAdsV23ImportService:
+    def __init__(self):
+        self.calls = []
+
+    def import_package(self, package_path):
+        from ncs_backend.admin.ads_v23_import_service import AdsV23ImportResult
+
+        self.calls.append(package_path)
+        return AdsV23ImportResult("ads-v23-batch", "2.0.0", "2.0.0", ("load_hourly",))
+
+
 def _schema_payload():
     return json.loads((EXAMPLES / "station-hourly.schema.v1.json").read_text("utf-8"))
 
@@ -174,3 +185,27 @@ def test_admin_api_rejects_invalid_ads_v21_request():
 
     assert missing_path.status_code == 400
     assert invalid_waves.status_code == 400
+
+
+def test_admin_api_imports_ads_v23_package():
+    service = _FakeAdsV23ImportService()
+    app = create_app(Settings(database_url="sqlite:///admin-api.sqlite"), ads_v23_import_service=service)
+
+    response = app.test_client().post(
+        "/internal/v1/ads-v23/imports",
+        json={"packagePath": "C:/delivery/ads-v23", "actor": "student"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["data"]["import"]["source_batch_id"] == "ads-v23-batch"
+    assert response.get_json()["data"]["actor"] == "student"
+    assert service.calls == ["C:/delivery/ads-v23"]
+
+
+def test_admin_api_rejects_invalid_ads_v23_request():
+    client = create_app(Settings(), ads_v23_import_service=_FakeAdsV23ImportService()).test_client()
+
+    response = client.post("/internal/v1/ads-v23/imports", json={"actor": "student"})
+
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "VALIDATION_INVALID_PARAMETER"

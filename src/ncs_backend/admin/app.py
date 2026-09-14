@@ -17,6 +17,8 @@ from ncs_backend.admin.services import (
 )
 from ncs_backend.admin.adapters.ads_v21_import import AdsV21ImportError
 from ncs_backend.admin.adapters.ads_v21_package import AdsV21PackageError
+from ncs_backend.admin.adapters.ads_v23_import import AdsV23ImportError
+from ncs_backend.admin.adapters.ads_v23_package import AdsV23PackageError
 from ncs_backend.shared.contracts.manifest import DatasetManifest
 from ncs_backend.shared.contracts.schema import DatasetSchema
 from ncs_backend.shared.domain.enums import BatchStatus
@@ -34,6 +36,7 @@ def create_app(
     quality_service: QualityService | None = None,
     publication_service: PublicationService | None = None,
     ads_v21_import_service: Any | None = None,
+    ads_v23_import_service: Any | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["NCS_SETTINGS"] = settings or Settings.from_env()
@@ -43,6 +46,7 @@ def create_app(
         "quality": quality_service,
         "publication": publication_service,
         "ads_v21_import": ads_v21_import_service,
+        "ads_v23_import": ads_v23_import_service,
     }
     install_request_context(app)
 
@@ -151,6 +155,19 @@ def create_app(
             result = require("ads_v21_import").import_package(package_path.strip(), waves)
         except (AdsV21PackageError, AdsV21ImportError, ValueError) as exc:
             raise AppError("ADS_V21_IMPORT_REJECTED", str(exc), 400) from exc
+        return success({"import": result, "actor": requested_by}, 201)
+
+    @app.post("/internal/v1/ads-v23/imports")
+    def import_ads_v23_package():
+        payload = body()
+        package_path = payload.get("packagePath")
+        if not isinstance(package_path, str) or not package_path.strip():
+            raise AppError("VALIDATION_INVALID_PARAMETER", "packagePath is required", 400, {"field": "packagePath"})
+        requested_by = actor(payload)
+        try:
+            result = require("ads_v23_import").import_package(package_path.strip())
+        except (AdsV23PackageError, AdsV23ImportError, ValueError) as exc:
+            raise AppError("ADS_V23_IMPORT_REJECTED", str(exc), 400) from exc
         return success({"import": result, "actor": requested_by}, 201)
 
     @app.get("/internal/v1/import-jobs/<batch_id>")

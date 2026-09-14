@@ -1,6 +1,6 @@
 # NCS 抽象接口与通信协议契约
 
-> 状态：公共抽象合同；大屏主要查询路由已实现，管理域的 ADS 专用导入入口和历史 ML 预留未实现
+> 状态：公共抽象合同；大屏主要查询路由已实现，ADS v2.1/v2.3 管理导入入口已实现，历史 ML 能力仍为预留
 > 契约版本：`1.0-rc1`
 > 依赖数据合同：`docs/data-contract.md`
 > 前端首屏冻结合同：`docs/大屏接口冻结合同_v1.md`
@@ -387,6 +387,7 @@ V1 允许前端根据已确认的高峰时段、Top1 站点等字段套用固定
 | --- | --- | --- |
 | P0 | `POST /internal/v1/import-jobs` | 根据 manifest 创建幂等导入任务 |
 | P0 | `POST /internal/v1/ads-v21/imports` | 同步校验并导入服务器本地 ADS v2.1 解压包；可选择 `A0`、`B` 波次 |
+| P0 | `POST /internal/v1/ads-v23/imports` | 同步校验并导入服务器本地 ADS Spark v2.3 `contract_v2` 包 |
 | P0 | `GET /internal/v1/import-jobs` | 按数据集、日期、状态查询任务 |
 | P0 | `GET /internal/v1/import-jobs/{jobId}` | 查询阶段、进度、计数和错误摘要 |
 | P0 | `POST /internal/v1/import-jobs/{jobId}/start` | 启动已创建任务 |
@@ -398,6 +399,8 @@ V1 允许前端根据已确认的高峰时段、Top1 站点等字段套用固定
 | P1 | `GET /internal/v1/import-jobs/{jobId}/quality-results` | 查询本批质量结果 |
 
 `POST /internal/v1/ads-v21/imports` 请求必须包含 `packagePath`、`actor`，可选 `waves`，默认导入 `A0` 和 `B`。数据库结构必须先由迁移账号初始化；该接口使用管理账号，仅执行包校验和 DML 导入，不执行 DDL。
+
+`POST /internal/v1/ads-v23/imports` 请求必须包含 `packagePath`、`actor`。服务校验 Manifest、CSV 字段、行数、主键、SHA-256 和跨文件订单总量后执行事务导入；数据库结构必须先由迁移账号初始化，接口不执行 DDL。
 
 ### 8.3 发布与回滚
 

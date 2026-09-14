@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 5
+ADS_MIGRATION_VERSION = 6
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -20,6 +20,10 @@ ADS_RESULT_TABLES = (
     "rpt_duration_distribution",
     "rpt_weekday_weekend",
     "rpt_station_hour_heatmap",
+    "rpt_station_daily",
+    "rpt_station_reference",
+    "rpt_station_hour_daily",
+    "rpt_load_hourly",
 )
 ADS_VIEW_NAMES = (
     "api_v1_data_status",
@@ -183,6 +187,76 @@ ADS_SCHEMA_SQL = (
         PRIMARY KEY (batch_id, station_id, hour, metric)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_daily (
+        batch_id VARCHAR(128) NOT NULL,
+        data_date DATE NOT NULL,
+        station_id VARCHAR(64) NOT NULL,
+        station_name VARCHAR(255) NOT NULL,
+        location_id VARCHAR(64),
+        order_count BIGINT NOT NULL,
+        total_kwh DECIMAL(24, 8) NOT NULL,
+        total_fees DECIMAL(24, 8) NOT NULL,
+        data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, data_date, station_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_reference (
+        batch_id VARCHAR(128) NOT NULL,
+        station_id VARCHAR(64) NOT NULL,
+        location_id VARCHAR(64),
+        facility_type VARCHAR(64),
+        station_name VARCHAR(255) NOT NULL,
+        address VARCHAR(512),
+        device_count BIGINT,
+        open_time VARCHAR(64),
+        update_time VARCHAR(64),
+        data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, station_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_hour_daily (
+        batch_id VARCHAR(128) NOT NULL,
+        data_date DATE NOT NULL,
+        station_id VARCHAR(64) NOT NULL,
+        station_name VARCHAR(255) NOT NULL,
+        stat_hour INTEGER NOT NULL,
+        order_count BIGINT NOT NULL,
+        total_kwh DECIMAL(24, 8) NOT NULL,
+        total_fees DECIMAL(24, 8) NOT NULL,
+        is_observed BOOLEAN NOT NULL DEFAULT 1,
+        data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, data_date, station_id, stat_hour)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_load_hourly (
+        batch_id VARCHAR(128) NOT NULL,
+        stat_time DATETIME NOT NULL,
+        total_kwh DECIMAL(24, 8) NOT NULL,
+        order_count BIGINT NOT NULL,
+        is_observed BOOLEAN NOT NULL,
+        fill_method VARCHAR(64) NOT NULL,
+        time_quality VARCHAR(64) NOT NULL,
+        allocation_method VARCHAR(64) NOT NULL,
+        data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, stat_time)
+    )
+    """,
 )
 
 ADS_INDEX_SQL = (
@@ -194,6 +268,10 @@ ADS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_rpt_duration_batch ON rpt_duration_distribution (batch_id, lower_minutes)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_profile_batch ON rpt_weekday_weekend (batch_id, day_type, metric_order)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_heatmap_batch ON rpt_station_hour_heatmap (batch_id, station_id, hour, metric)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_station_daily_batch_date ON rpt_station_daily (batch_id, data_date, total_fees)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_station_reference_batch ON rpt_station_reference (batch_id, station_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_station_hour_daily_batch_date ON rpt_station_hour_daily (batch_id, data_date, station_id, stat_hour)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_load_hourly_batch_time ON rpt_load_hourly (batch_id, stat_time)",
 )
 
 ADS_MYSQL_INDEX_SQL = (
@@ -205,6 +283,10 @@ ADS_MYSQL_INDEX_SQL = (
     "CREATE INDEX idx_rpt_duration_batch ON rpt_duration_distribution (batch_id, lower_minutes)",
     "CREATE INDEX idx_rpt_profile_batch ON rpt_weekday_weekend (batch_id, day_type, metric_order)",
     "CREATE INDEX idx_rpt_heatmap_batch ON rpt_station_hour_heatmap (batch_id, station_id, hour, metric)",
+    "CREATE INDEX idx_rpt_station_daily_batch_date ON rpt_station_daily (batch_id, data_date, total_fees)",
+    "CREATE INDEX idx_rpt_station_reference_batch ON rpt_station_reference (batch_id, station_id)",
+    "CREATE INDEX idx_rpt_station_hour_daily_batch_date ON rpt_station_hour_daily (batch_id, data_date, station_id, stat_hour)",
+    "CREATE INDEX idx_rpt_load_hourly_batch_time ON rpt_load_hourly (batch_id, stat_time)",
 )
 
 ADS_VIEW_SQL = (
@@ -262,6 +344,15 @@ ADS_VIEW_SQL = (
     FROM rpt_station_ranking r
     JOIN ctl_publication p ON p.dataset_code = 'station_ranking_snapshot'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, SUM(r.order_count) AS order_count,
+           SUM(r.total_fees) AS total_fees, SUM(r.total_kwh) AS total_kwh,
+           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at,
+           r.staleness, r.location_id AS region_id
+    FROM rpt_station_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    GROUP BY r.batch_id, r.station_id, r.station_name, r.data_version, r.staleness, r.location_id
     """,
     """
     CREATE VIEW IF NOT EXISTS api_v1_process_summary AS
@@ -270,7 +361,7 @@ ADS_VIEW_SQL = (
            r.average_voltage, r.average_max_temperature, r.data_date,
            r.data_version, r.generated_at, r.staleness
     FROM rpt_process_summary r
-    JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
+    JOIN ctl_publication p ON p.dataset_code IN ('charging_process_daily', 'process_daily')
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
     """
@@ -279,7 +370,7 @@ ADS_VIEW_SQL = (
            r.order_count, r.ratio, r.data_date, r.data_version,
            r.generated_at, r.staleness, r.region_id, r.station_id
     FROM rpt_duration_distribution r
-    JOIN ctl_publication p ON p.dataset_code = 'charging_duration_distribution'
+    JOIN ctl_publication p ON p.dataset_code IN ('charging_duration_distribution', 'duration_distribution')
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
     """
@@ -310,6 +401,27 @@ ADS_VIEW_SQL = (
            r.region_id
     FROM rpt_station_hour_heatmap r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_heatmap_snapshot'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_kwh AS value,
+           r.is_observed, 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.order_count AS value,
+           r.is_observed, 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_fees AS value,
+           r.is_observed, 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
 )
@@ -377,7 +489,7 @@ ADS_MYSQL_VIEW_SQL = (
            r.average_voltage, r.average_max_temperature, r.data_date,
            r.data_version, r.generated_at, r.staleness
     FROM rpt_process_summary r
-    JOIN ctl_publication p ON p.dataset_code = 'charging_process_daily'
+    JOIN ctl_publication p ON p.dataset_code IN ('charging_process_daily', 'process_daily')
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
     """
@@ -386,7 +498,7 @@ ADS_MYSQL_VIEW_SQL = (
            r.order_count, r.ratio, r.data_date, r.data_version,
            r.generated_at, r.staleness, r.region_id, r.station_id
     FROM rpt_duration_distribution r
-    JOIN ctl_publication p ON p.dataset_code = 'charging_duration_distribution'
+    JOIN ctl_publication p ON p.dataset_code IN ('charging_duration_distribution', 'duration_distribution')
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
     """
@@ -417,6 +529,27 @@ ADS_MYSQL_VIEW_SQL = (
            r.region_id
     FROM rpt_station_hour_heatmap r
     JOIN ctl_publication p ON p.dataset_code = 'station_hour_heatmap_snapshot'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_kwh AS value,
+           r.is_observed, 'kwh' AS metric, 'charging_energy' AS metric_code, 'kWh' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.order_count AS value,
+           r.is_observed, 'orders' AS metric, 'order_count' AS metric_code, 'count' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
+      AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
+    UNION ALL
+    SELECT r.station_id, r.station_name, r.stat_hour AS hour, r.total_fees AS value,
+           r.is_observed, 'fees' AS metric, 'total_fees' AS metric_code, 'CNY' AS unit,
+           r.data_date, r.data_version, r.generated_at, r.staleness, NULL AS region_id
+    FROM rpt_station_hour_daily r
+    JOIN ctl_publication p ON p.dataset_code = 'station_hour_daily'
       AND p.batch_id = r.batch_id AND p.status = 'PUBLISHED'
     """,
 )

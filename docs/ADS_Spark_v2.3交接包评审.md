@@ -10,7 +10,7 @@ v2.3 是目前最新的 ADS 模拟联调基线。包内 10 个 CSV 的文件哈�
 
 本仓库继续只负责处理后数据的结果库、导入管理和 Flask 查询后端。Spark 清洗分析由上游完成；机器学习按实训要求属于可选项，不进入当前仓库范围。包内 `ml/` 仅作为上游输入证据，不导入结果库，也不据此实现训练或推理。
 
-当前进度：v2.3 包解析首阶段已实现，代码位于 `src/ncs_backend/admin/adapters/ads_v23_package.py` 和 `ads_v23_schema.py`。适配器已在本机对真实交接包验证通过：识别 `contract_v2`、校验 10 个数据集、CSV 表头、行数、主键唯一性及 SHA-256；尚未写入 MySQL 结果表。
+当前进度：v2.3 包解析和事务导入首阶段已实现，代码位于 `src/ncs_backend/admin/adapters/ads_v23_package.py`、`ads_v23_schema.py` 和 `ads_v23_import.py`。适配器已在本机对真实交接包验证通过；导入器已在 SQLite 导入 10 个数据集并生成发布记录，尚未在虚拟机 MySQL 实际导入。
 
 ## 2. 包级核验
 
