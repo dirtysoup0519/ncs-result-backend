@@ -96,7 +96,10 @@ python scripts/run_local.py admin    # 或 query / console
 ```powershell
 python scripts/setup_mysql_ads.py --initialize --grant-reader --verify   # 迁移+授权+自检
 python scripts/verify_mysql_e2e.py                                        # 完整端到端验收
+python scripts/verify_dual_entry_idempotency.py                           # 双入口幂等验收（当前分支）
 ```
+
+`verify_dual_entry_idempotency.py` 覆盖：首次导入、重复导入不重复发布、失败导入完整回滚三步；同一包通过 CLI 入口与管理服务入口重复提交，数据库状态必须保持不变。不提供 `--package` 时自动合成 18 数据集的 v2.5 样例包；`--database-url` 指向真实 MySQL 时即为上机验收形态，本地默认用 SQLite 预演。
 
 ## 本地验证
 

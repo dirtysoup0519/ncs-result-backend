@@ -20,6 +20,8 @@ def _database(count=4, gap=False):
 
 
 def test_builder_creates_profile_and_five_channel_tensors():
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
     dataset = LoadHourlyDatasetBuilder(dialect=SQLITE_DIALECT).build(_database(), lookback=4, horizon=2)
     assert dataset.profile["rowCount"] == 4
     assert dataset.profile["qualityStatus"] == "PASSED"
