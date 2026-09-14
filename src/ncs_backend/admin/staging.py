@@ -47,10 +47,10 @@ class DbApiStagingWriter:
             cursor = self._dialect.cursor(connection)
             cursor.execute(
                 """
-                SELECT row_number, payload_json, row_sha256
+                SELECT `row_number`, payload_json, row_sha256
                 FROM stg_import_row
                 WHERE batch_id = ?
-                ORDER BY row_number
+                ORDER BY `row_number`
                 """,
                 (str(batch_id),),
             )
@@ -69,7 +69,7 @@ class DbApiStagingWriter:
             cursor.executemany(
                 """
                 INSERT INTO stg_import_row (
-                    batch_id, row_number, payload_json, row_sha256, loaded_at
+                    batch_id, `row_number`, payload_json, row_sha256, loaded_at
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
                 [(str(batch_id), index, payload, digest, loaded_at) for index, (payload, digest) in enumerate(encoded, start=1)],
@@ -97,7 +97,7 @@ class DbApiStagingWriter:
                 SELECT payload_json
                 FROM stg_import_row
                 WHERE batch_id = ?
-                ORDER BY row_number
+                ORDER BY `row_number`
                 """,
                 (str(batch_id),),
             )

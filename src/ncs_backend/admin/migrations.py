@@ -117,11 +117,11 @@ STAGING_SCHEMA_SQL = (
     """
     CREATE TABLE IF NOT EXISTS stg_import_row (
         batch_id VARCHAR(128) NOT NULL,
-        row_number BIGINT NOT NULL,
+        `row_number` BIGINT NOT NULL,
         payload_json TEXT NOT NULL,
         row_sha256 VARCHAR(64) NOT NULL,
         loaded_at TIMESTAMP NOT NULL,
-        PRIMARY KEY (batch_id, row_number)
+        PRIMARY KEY (batch_id, `row_number`)
     )
     """,
 )
