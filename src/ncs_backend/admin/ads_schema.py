@@ -44,9 +44,9 @@ ADS_SCHEMA_SQL = (
         precision_value INTEGER NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, metric_code)
     )
     """,
@@ -60,9 +60,9 @@ ADS_SCHEMA_SQL = (
         order_ratio DECIMAL(24, 8) NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, platform_code)
     )
     """,
@@ -77,11 +77,11 @@ ADS_SCHEMA_SQL = (
         total_kwh DECIMAL(24, 8) NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
         region_id VARCHAR(64),
         station_id VARCHAR(64),
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, granularity, period_start)
     )
     """,
@@ -95,10 +95,10 @@ ADS_SCHEMA_SQL = (
         total_kwh DECIMAL(24, 8) NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
         region_id VARCHAR(64),
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, station_id)
     )
     """,
@@ -117,9 +117,9 @@ ADS_SCHEMA_SQL = (
         average_voltage DECIMAL(24, 8),
         average_max_temperature DECIMAL(24, 8),
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, data_date, scope_type, station_id)
     )
     """,
@@ -134,11 +134,11 @@ ADS_SCHEMA_SQL = (
         ratio DECIMAL(24, 8) NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
         region_id VARCHAR(64),
         station_id VARCHAR(64),
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, bucket_code)
     )
     """,
@@ -158,10 +158,10 @@ ADS_SCHEMA_SQL = (
         start_date DATE,
         end_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
         region_id VARCHAR(64),
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, day_type, metric_key)
     )
     """,
@@ -176,10 +176,10 @@ ADS_SCHEMA_SQL = (
         is_observed BOOLEAN NOT NULL,
         data_date DATE,
         data_version VARCHAR(64) NOT NULL,
-        generated_at TIMESTAMP NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
         region_id VARCHAR(64),
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, station_id, hour, metric)
     )
     """,
@@ -462,7 +462,7 @@ def initialize_ads_result_schema(
     cursor = dialect.cursor(connection)
     try:
         cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS {ADS_MIGRATION_TABLE} (version INTEGER PRIMARY KEY, checksum VARCHAR(64) NOT NULL, applied_at TIMESTAMP NOT NULL)"
+            f"CREATE TABLE IF NOT EXISTS {ADS_MIGRATION_TABLE} (version INTEGER PRIMARY KEY, checksum VARCHAR(64) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
         rows = cursor.execute(
             f"SELECT checksum FROM {ADS_MIGRATION_TABLE} WHERE version = ?",

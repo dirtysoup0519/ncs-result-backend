@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ctl_schema_migration (
     version INTEGER PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     checksum VARCHAR(64) NOT NULL,
-    applied_at TIMESTAMP NOT NULL
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
 
@@ -39,8 +39,8 @@ CONTROL_SCHEMA_SQL = (
         owner VARCHAR(128) NOT NULL,
         current_schema_version VARCHAR(32),
         status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
-        created_at TIMESTAMP NOT NULL,
-        updated_at TIMESTAMP NOT NULL
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     """
@@ -50,7 +50,7 @@ CONTROL_SCHEMA_SQL = (
         schema_json TEXT NOT NULL,
         schema_checksum VARCHAR(64) NOT NULL,
         compatibility VARCHAR(32) NOT NULL DEFAULT 'BACKWARD',
-        created_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (dataset_code, schema_version)
     )
     """,
@@ -66,9 +66,9 @@ CONTROL_SCHEMA_SQL = (
         row_count BIGINT NOT NULL DEFAULT 0,
         status VARCHAR(32) NOT NULL,
         error_summary TEXT,
-        created_at TIMESTAMP NOT NULL,
-        updated_at TIMESTAMP NOT NULL,
-        published_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_at TIMESTAMP NULL,
         UNIQUE (dataset_code, source_batch_id)
     )
     """,
@@ -82,7 +82,7 @@ CONTROL_SCHEMA_SQL = (
         checked_row_count BIGINT NOT NULL DEFAULT 0,
         failure_count BIGINT NOT NULL DEFAULT 0,
         details_json TEXT,
-        created_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (batch_id, rule_code)
     )
     """,
@@ -94,8 +94,8 @@ CONTROL_SCHEMA_SQL = (
         schema_version VARCHAR(32) NOT NULL,
         status VARCHAR(32) NOT NULL,
         supersedes_publication_id VARCHAR(128),
-        published_at TIMESTAMP NOT NULL,
-        retracted_at TIMESTAMP,
+        published_at TIMESTAMP NULL,
+        retracted_at TIMESTAMP NULL,
         UNIQUE (dataset_code, batch_id)
     )
     """,
@@ -108,7 +108,7 @@ CONTROL_SCHEMA_SQL = (
         resource_id VARCHAR(128),
         request_id VARCHAR(128),
         details_json TEXT,
-        created_at TIMESTAMP NOT NULL
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
 )
@@ -120,7 +120,7 @@ STAGING_SCHEMA_SQL = (
         `row_number` BIGINT NOT NULL,
         payload_json TEXT NOT NULL,
         row_sha256 VARCHAR(64) NOT NULL,
-        loaded_at TIMESTAMP NOT NULL,
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (batch_id, `row_number`)
     )
     """,
