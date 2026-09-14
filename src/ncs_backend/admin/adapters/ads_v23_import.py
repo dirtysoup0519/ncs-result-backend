@@ -233,4 +233,6 @@ def _upper_minutes(value: str) -> int | None:
 
 
 def _timestamp(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat()
+    # MySQL 5.7 DATETIME does not accept an ISO-8601 timezone suffix.
+    # Persist UTC wall-clock time in the same format accepted by SQLite.
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
