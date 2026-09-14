@@ -21,6 +21,18 @@ python scripts/verify_mysql_ads.py --initialize
 pytest -q tests/integration/test_mysql_ads.py
 ```
 
+统一初始化、授权和三账号自检：
+
+```powershell
+$env:NCS_MYSQL_MIGRATOR_URL = "mysql+pymysql://<migrator>:<password>@<host>:3306/<database>"
+$env:NCS_MYSQL_PRIVILEGED_URL = "mysql+pymysql://<privileged>:<password>@<host>:3306/<database>"
+$env:NCS_MYSQL_ADMIN_URL = "mysql+pymysql://<admin>:<password>@<host>:3306/<database>"
+$env:NCS_MYSQL_READER_URL = "mysql+pymysql://<reader>:<password>@<host>:3306/<database>"
+python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
+```
+
+`--grant-reader` 仅向固定 `api_v1_*` 视图授予 `SELECT`，不创建账号、不修改密码。`--verify` 检查迁移账号具备 DDL、管理账号仅具备 DML、查询账号能读取全部必需视图且不能读取物理结果表和控制表。
+
 不带 `--initialize` 时只检查服务器元信息和 `api_v1_*` 视图合同；带 `--initialize` 才会执行控制表、结果表和视图迁移。脚本不会执行上游联调包中的 `TRUNCATE` 或 `LOAD DATA` SQL。
 
 ## 权限边界

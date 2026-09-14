@@ -86,6 +86,14 @@ python scripts/run_local.py console
 
 ADS v2.1 已提供同步管理入口 `POST /internal/v1/ads-v21/imports`。它接收服务器本地解压目录并选择 `A0`/`B` 波次；迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
 
+MySQL 迁移、固定视图授权和三账号权限自检使用：
+
+```powershell
+python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
+```
+
+连接地址分别通过 `NCS_MYSQL_MIGRATOR_URL`、`NCS_MYSQL_PRIVILEGED_URL`、`NCS_MYSQL_ADMIN_URL`、`NCS_MYSQL_READER_URL` 提供。命令不会输出连接串；特权连接只在授予固定视图权限时需要。
+
 代码边界和后续阶段见：
 
 - `docs/代码实现规划.md`
