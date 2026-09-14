@@ -10,6 +10,8 @@ from ncs_backend.admin.adapters.ads_v21_import import AdsV21A0Importer, AdsV21Im
 from ncs_backend.admin.adapters.ads_v21_package import AdsV21DatasetDescriptor, AdsV21PackageDescriptor
 from ncs_backend.admin.adapters.ads_v21_schema import ADS_V21_FILE_SPECS
 from ncs_backend.admin.local_database import initialize_local_database
+from ncs_backend.bootstrap import configured_query_app
+from ncs_backend.shared.config import Settings
 
 
 class _FakeReader:
@@ -109,3 +111,31 @@ def test_importer_rejects_cross_file_order_mismatch(tmp_path):
 
     with pytest.raises(AdsV21ImportError, match="cross-file order reconciliation"):
         AdsV21A0Importer(lambda: sqlite3.connect(database), reader=reader).import_package(package)
+
+
+def test_configured_query_app_reads_published_ads_views(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    package, reader = _fixture_package()
+    AdsV21A0Importer(lambda: sqlite3.connect(database), reader=reader).import_package(package)
+    client = configured_query_app(Settings(database_url=f"sqlite:///{database.as_posix()}"),).test_client()
+
+    overview = client.get("/api/v1/dashboard/overview")
+    trend = client.get("/api/v1/revenue/trend")
+    status = client.get("/api/v1/meta/data-status")
+    capabilities = client.get("/api/v1/meta/capabilities")
+    filters = client.get("/api/v1/meta/filter-options?topic=stationRanking")
+
+    assert overview.status_code == 200
+    assert len(overview.json["data"]["items"]) == 7
+    assert trend.json["data"]["granularity"] == "MONTH"
+    assert len(trend.json["data"]["points"]) == 1
+    assert status.json["data"]["qualityStatus"] == "PASSED"
+    assert status.json["data"]["stationCount"] == 1
+    available = {item["capabilityCode"]: item["available"] for item in capabilities.json["data"]["items"]}
+    assert available["overview"] is True
+    assert available["stationRanking"] is True
+    assert available["durationDistribution"] is False
+    assert filters.json["data"]["stations"][0]["stationId"] == "S1"
+    assert filters.json["data"]["dateRange"] == {"minDate": "2015-12-28", "maxDate": "2015-12-28"}
+    assert filters.json["meta"]["empty"] is False

@@ -56,6 +56,51 @@ class DbApiDashboardRepository:
             return False
         return bool(rows)
 
+    def filter_options(self, topic: str) -> Mapping[str, Any]:
+        resource = {
+            "globalStatus": "data_status",
+            "overview": "overview",
+            "platformDistribution": "platform",
+            "durationDistribution": "duration",
+            "weekdayWeekendProfile": "weekday_weekend",
+            "loadPrediction": "prediction",
+            "stationHourHeatmap": "heatmap",
+            "stationRanking": "ranking",
+            "feeEnergyTrend": "fee_energy_trend",
+            "processSummary": "process_summary",
+        }.get(topic)
+        if resource is None:
+            return {"topic": topic, "regions": [], "stations": [], "dateRange": None}
+
+        stations: list[dict[str, Any]] = []
+        if resource == "ranking":
+            try:
+                station_rows = self._query(
+                    "SELECT station_id, station_name, region_id FROM api_v1_station_ranking ORDER BY station_id",
+                    (),
+                )
+            except Exception:
+                station_rows = []
+            stations = [
+                {"stationId": row.get("station_id"), "stationName": row.get("station_name"), "regionId": row.get("region_id")}
+                for row in station_rows
+            ]
+
+        date_range = None
+        if resource in self.VIEW_BY_RESOURCE:
+            view = self.VIEW_BY_RESOURCE[resource]
+            date_column = "period_start" if resource == "fee_energy_trend" else "data_date"
+            try:
+                row = self._query(
+                    f"SELECT MIN({date_column}) AS min_date, MAX({date_column}) AS max_date FROM {view}",
+                    (),
+                )[0]
+            except Exception:
+                row = {}
+            if row.get("min_date") is not None:
+                date_range = {"minDate": _date_text(row.get("min_date")), "maxDate": _date_text(row.get("max_date"))}
+        return {"topic": topic, "regions": [], "stations": stations, "dateRange": date_range}
+
     def _fetch_data_status(self, params: Mapping[str, Any]) -> QueryPayload:
         rows = self._query(
             """

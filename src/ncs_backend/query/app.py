@@ -136,12 +136,15 @@ def create_app(
             raise AppError("VALIDATION_INVALID_PARAMETER", "topic is required", 400, {"field": "topic"})
         if topic not in {item["componentCode"] for item in _COMPONENTS}:
             raise AppError("VALIDATION_INVALID_PARAMETER", "topic is not supported", 400, {"field": "topic"})
+        service: DashboardQueryService = app.config["NCS_QUERY_SERVICE"]
+        data = service.filter_options(topic)
+        empty = not data.get("regions") and not data.get("stations") and data.get("dateRange") is None
         return jsonify(
             {
                 "code": "OK",
                 "message": "ok",
-                "data": {"topic": topic, "regions": [], "stations": [], "dateRange": None},
-                "meta": static_meta(empty=True),
+                "data": data,
+                "meta": static_meta(empty=empty),
             }
         )
 

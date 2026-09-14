@@ -128,12 +128,18 @@ ADS_VIEW_SQL = (
     """
     CREATE VIEW IF NOT EXISTS api_v1_data_status AS
     SELECT b.dataset_code, b.data_date, b.row_count AS source_record_count,
-           CAST(NULL AS INTEGER) AS station_count, b.updated_at,
+           CAST((SELECT r.metric_value
+                 FROM rpt_dashboard_overview r
+                 JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                   AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+                 WHERE r.metric_code = 'total_station_count'
+                 ORDER BY r.data_date DESC LIMIT 1) AS INTEGER) AS station_count,
+           b.updated_at,
            CASE WHEN EXISTS (
                SELECT 1 FROM ctl_quality_result q
                WHERE q.batch_id = b.batch_id AND q.passed = 0
                  AND q.severity IN ('BLOCKER', 'ERROR')
-           ) THEN 'ERROR' ELSE 'READY' END AS quality_status,
+           ) THEN 'FAILED' ELSE 'PASSED' END AS quality_status,
            'UNKNOWN' AS staleness, b.schema_version AS data_version
     FROM ctl_import_batch b
     JOIN ctl_publication p ON p.dataset_code = b.dataset_code

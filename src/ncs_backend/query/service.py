@@ -43,6 +43,12 @@ class DashboardQueryService:
         checker = getattr(self._repository, "is_available", None)
         return bool(checker(resource)) if checker is not None else False
 
+    def filter_options(self, topic: str) -> Mapping[str, Any]:
+        checker = getattr(self._repository, "filter_options", None)
+        if checker is None:
+            return {"topic": topic, "regions": [], "stations": [], "dateRange": None}
+        return checker(topic)
+
     def _validate(self, resource: str, raw: Mapping[str, str]) -> dict[str, Any]:
         rules = RESOURCE_RULES[resource]
         unknown = set(raw) - rules["allowed"]

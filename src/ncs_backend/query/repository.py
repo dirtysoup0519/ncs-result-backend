@@ -34,6 +34,9 @@ class DashboardReadRepository(Protocol):
     def is_available(self, resource: str) -> bool:
         """Whether the published data source for a resource is usable."""
 
+    def filter_options(self, topic: str) -> Mapping[str, Any]:
+        """Return published filter values for a component topic."""
+
 
 @dataclass(slots=True)
 class EmptyDashboardRepository:
@@ -50,6 +53,9 @@ class EmptyDashboardRepository:
 
     def is_available(self, resource: str) -> bool:
         return resource in self._resources and not self._resources[resource].empty
+
+    def filter_options(self, topic: str) -> Mapping[str, Any]:
+        return {"topic": topic, "regions": [], "stations": [], "dateRange": None}
 
     def _empty(self, resource: str) -> QueryPayload:
         data: dict[str, Any]
