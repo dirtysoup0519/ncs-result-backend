@@ -1,10 +1,12 @@
 # NCS 结果库与后端
 
-当前分支已经完成 ADS v2.1 模拟联调包到 MySQL 8.0.46 结果库和大屏查询 API 的首轮端到端闭环，包括包校验、显式转换、结果表、发布视图、重复导入、失败回滚和三账号权限隔离。项目当前状态和下一步统一见 `docs/项目当前状态与下一步.md`。
+当前统一业务、架构和代码规划见 `docs/项目业务架构与代码规划.md`。现有代码已完成 ADS v2.1 到 Windows MySQL 8.0.46 的历史联调；最新 ADS Spark v2.3 已核验但尚未适配，当前虚拟机 MySQL 5.7.35 也尚未完成项目建库和权限验收。
 
 查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。9 个当前必需视图已通过真实 MySQL 验证；预测视图属于可选上游能力，不作为当前健康检查的阻断项。
 
 当前范围只包含处理后数据的结果库、数据管理后端和大屏查询后端。机器学习训练、推理、模型管理及特征处理不在当前范围；上游若提供预测结果，本项目按普通处理后数据集导入和发布。范围决策见 `docs/当前范围决策.md`，历史 ML 原型仅保存在 `archive/ml-control-plane-prototype`。
+
+最终实训环境采用 Python 3.11 或 3.12；上游使用 Hadoop 3.x 与 Spark SQL/PySpark 产生 ADS，MySQL 运行在虚拟机内。数据管理程序支持 Windows 远程导入和虚拟机就地处理两种部署模式，Windows Flask 通过虚拟机 IP 查询。设计见 `docs/双运行位置数据接入设计.md`。前端单独使用 Node.js 23+、Vue 3 和 DataV。
 
 向前端交接项目时不要直接压缩工作目录。数据库密码放在被忽略的 `.local/ncs.env`，前端只使用查询 API 和可选开发 API Key；快速说明见 `docs/前端联调交接说明.md`，从下载仓库开始的完整步骤见 `docs/仓库下载与联调操作手册.md`。
 
@@ -115,3 +117,5 @@ python scripts/verify_mysql_e2e.py
 - `docs/data-contract.md`
 - `docs/当前范围决策.md`
 - `docs/项目当前状态与下一步.md`
+- `docs/项目业务架构与代码规划.md`
+- `docs/ADS_Spark_v2.3交接包评审.md`

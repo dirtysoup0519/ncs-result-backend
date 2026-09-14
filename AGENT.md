@@ -11,7 +11,7 @@
 
 ## 项目背景
 
-本项目属于“新能源汽车充电桩应用管理平台 NCS”，目标是基于 Hadoop、Hive、MySQL、Flask、Vue 和 ECharts，完成充电桩数据分析与可视化。
+本项目属于“新能源汽车充电桩应用管理平台 NCS”，整体采用 Hadoop 3.x、Spark SQL/PySpark、MySQL、Flask、Vue 3 和 DataV 完成充电桩数据分析与可视化。后端 Python 验收版本固定为 3.11 或 3.12，前端 Node.js 为 23 及以上。
 
 课件确认的端到端链路为：
 
@@ -24,7 +24,7 @@
   -> Hive ADS（应用结果层）
   -> MySQL（结果库）
   -> Flask RESTful API（后端）
-  -> Vue + ECharts（可视化大屏）
+  -> Vue 3 + DataV（可视化大屏）
 ```
 
 上游数仓的分层职责：
@@ -90,7 +90,11 @@ Hive ADS
 
 ## 当前状态
 
-当前已完成仓库基础骨架、合同模型、状态机、SQLite 本地开发链路，以及 ADS v2.1 到 MySQL 8.0.46 结果库和查询 API 的首轮端到端联调。A0/Wave B 共 9 个数据集已经完成映射、导入、发布、回滚和只读视图验证。当前任务入口见 `docs/项目当前状态与下一步.md`；正式 ADS v2.2、管理 API 导入入口和部署加固尚未完成。
+当前业务、部署结构和代码阶段以 `docs/项目业务架构与代码规划.md` 为统一基线。
+
+当前已在历史 Windows MySQL 8.0.46 环境完成 ADS v2.1 首轮联调。ADS Spark v2.3 最新包的 10 个数据集已完成静态核验，但 v2.3 代码适配尚未实现；当前虚拟机 MySQL 5.7.35 也尚未完成建库与权限验收。当前任务入口见 `docs/项目当前状态与下一步.md`。交接包内容只作为数据与合同证据，禁止直接执行其中的 SQL 或把其 `DELETE + LOAD DATA` 流程替代本项目的批次发布机制。
+
+MySQL 固定在虚拟机。查询 Flask 运行在 Windows 并通过虚拟机 IP 访问；数据管理程序支持 `windows_remote` 和 `co_located_vm` 两种显式模式，后者可在虚拟机内使用回环地址直接处理上游 ADS/HDFS。不得根据地址自动猜模式，也不得使用 root 作为应用账号。
 
 开始编码前至少需要确认：
 
