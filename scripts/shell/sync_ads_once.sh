@@ -26,7 +26,36 @@ if [[ ! -f "$marker" ]]; then
   exit 20
 fi
 log "processing $name"
-if ! python "$NCS_REPO/scripts/import_ads_v23.py" --package "$package" --database-url "$NCS_DATABASE_URL" --skip-initialize >>"$LOGS/$name.log" 2>&1; then
+
+work="$(mktemp -d "$ROOT/work.XXXXXX")"
+cleanup() { rm -rf -- "$work"; }
+trap cleanup EXIT
+if [[ "$package" == *.zip ]]; then
+  if ! unzip -q "$package" -d "$work" >>"$LOGS/$name.log" 2>&1; then
+    log "extract failed: $name"
+    mv -- "$package" "$REJECTED/$name"
+    mv -- "$marker" "$REJECTED/$(basename "$marker")" 2>/dev/null || true
+    exit 50
+  fi
+else
+  if ! tar -xzf "$package" -C "$work" >>"$LOGS/$name.log" 2>&1; then
+    log "extract failed: $name"
+    mv -- "$package" "$REJECTED/$name"
+    mv -- "$marker" "$REJECTED/$(basename "$marker")" 2>/dev/null || true
+    exit 50
+  fi
+fi
+
+mapfile -t manifests < <(find "$work" -maxdepth 3 -type f -name manifest.json -print)
+if [[ "${#manifests[@]}" -ne 1 ]]; then
+  log "package must contain exactly one manifest.json: $name"
+  mv -- "$package" "$REJECTED/$name"
+  mv -- "$marker" "$REJECTED/$(basename "$marker")" 2>/dev/null || true
+  exit 50
+fi
+package_root="$(dirname "${manifests[0]}")"
+
+if ! python "$NCS_REPO/scripts/import_ads_v23.py" --package "$package_root" --database-url "$NCS_DATABASE_URL" --skip-initialize >>"$LOGS/$name.log" 2>&1; then
   log "import failed: $name"
   mv -- "$package" "$REJECTED/$name"
   mv -- "$marker" "$REJECTED/$(basename "$marker")" 2>/dev/null || true
