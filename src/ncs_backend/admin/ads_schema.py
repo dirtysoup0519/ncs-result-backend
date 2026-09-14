@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 8
+ADS_MIGRATION_VERSION = 9
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -355,7 +355,8 @@ ADS_VIEW_SQL = (
     UNION ALL
     SELECT r.station_id, r.station_name, SUM(r.order_count) AS order_count,
            SUM(r.total_fees) AS total_fees, SUM(r.total_kwh) AS total_kwh,
-           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at,
+           (SELECT MAX(r2.data_date) FROM rpt_station_daily r2 WHERE r2.batch_id = r.batch_id) AS data_date,
+           r.data_version, MAX(r.generated_at) AS generated_at,
            r.staleness, r.location_id AS region_id
     FROM rpt_station_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_daily'
@@ -500,7 +501,8 @@ ADS_MYSQL_VIEW_SQL = (
     UNION ALL
     SELECT r.station_id, r.station_name, SUM(r.order_count) AS order_count,
            SUM(r.total_fees) AS total_fees, SUM(r.total_kwh) AS total_kwh,
-           MAX(r.data_date) AS data_date, r.data_version, MAX(r.generated_at) AS generated_at,
+           (SELECT MAX(r2.data_date) FROM rpt_station_daily r2 WHERE r2.batch_id = r.batch_id) AS data_date,
+           r.data_version, MAX(r.generated_at) AS generated_at,
            r.staleness, r.location_id AS region_id
     FROM rpt_station_daily r
     JOIN ctl_publication p ON p.dataset_code = 'station_daily'

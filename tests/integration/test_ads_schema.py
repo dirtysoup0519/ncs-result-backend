@@ -72,3 +72,36 @@ def test_published_views_do_not_expose_unpublished_rows(tmp_path):
 
     assert hidden == 0
     assert visible == 1
+
+
+def test_station_daily_ranking_uses_full_period_and_common_end_date(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        initialize_ads_result_schema(connection)
+        rows = [
+            ("station-batch", "2019-01-01", "S1", "站点1", "L1", 2, "10", "2", "v2.3"),
+            ("station-batch", "2019-02-01", "S1", "站点1", "L1", 3, "15", "3", "v2.3"),
+            ("station-batch", "2019-01-01", "S2", "站点2", "L2", 4, "20", "4", "v2.3"),
+        ]
+        connection.executemany(
+            "INSERT INTO rpt_station_daily (batch_id, data_date, station_id, station_name, location_id, order_count, total_kwh, total_fees, data_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.execute(
+            "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("station-batch", "station_daily", "2.0.0", "source", "ads://source", "b" * 64, "2019-02-01", 3, "PUBLISHED"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            ("station-pub", "station_daily", "station-batch", "2.0.0", "PUBLISHED"),
+        )
+        connection.commit()
+        ranking = connection.execute(
+            "SELECT station_id, order_count, total_fees, data_date FROM api_v1_station_ranking ORDER BY total_fees DESC"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert ranking == [("S1", 5, 5, "2019-02-01"), ("S2", 4, 4, "2019-02-01")]
