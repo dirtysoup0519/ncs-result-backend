@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCS 数据库工具</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='db_console.css') }}">
+</head>
+<body>
+  <main class="console-shell">
+    <header class="topbar">
+      <div><span class="status-dot" id="status-dot"></span><strong>NCS 数据库工具</strong><span id="status-text">正在检查</span></div>
+      <div class="runtime-actions">
+        <button data-runtime="START">启动</button>
+        <button data-runtime="STOP" class="danger">停止</button>
+        <button data-runtime="RESTART">重启</button>
+        <button id="refresh-status">刷新</button>
+      </div>
+    </header>
+    <section class="panel sql-panel">
+      <div class="panel-heading"><h1>SQL</h1><span id="sql-meta">等待执行</span></div>
+      <textarea id="sql-input" spellcheck="false">SELECT * FROM ctl_dataset LIMIT 20;</textarea>
+      <div class="toolbar"><button id="run-sql" class="primary">执行 SQL</button><button id="clear-sql">清空</button><span>Ctrl+Enter 执行</span></div>
+      <div id="sql-error" class="error" hidden></div>
+      <div class="table-wrap"><table id="result-table"><tbody><tr><td class="empty">执行查询后显示结果</td></tr></tbody></table></div>
+    </section>
+    <section class="panel log-panel">
+      <div class="panel-heading"><h1>操作日志</h1><label><input type="checkbox" id="auto-refresh" checked> 自动刷新</label></div>
+      <div id="logs" class="logs" aria-live="polite"></div>
+    </section>
+  </main>
+  <script>
+    const state = { lastSequence: 0 };
+    const $ = (id) => document.getElementById(id);
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.message || body.code || '请求失败');
+      return body.data;
+    }
+    function setStatus(status, connected) {
+      $('status-text').textContent = `${status.runtimeStatus} / ${status.connectionStatus}`;
+      $('status-dot').className = `status-dot ${connected ? 'ok' : 'bad'}`;
+      document.querySelectorAll('[data-runtime]').forEach((button) => {
+        button.disabled = !status.startStopSupported;
+      });
+    }
+    async function refreshStatus() {
+      try { const status = await request('/internal/db-console/status'); setStatus(status, status.connectionStatus === 'CONNECTED'); }
+      catch (error) { $('status-text').textContent = error.message; $('status-dot').className = 'status-dot bad'; }
+    }
+    function renderRows(data) {
+      const table = $('result-table'); table.replaceChildren();
+      if (!data.columns.length) { table.innerHTML = `<tbody><tr><td class="empty">影响行数：${data.affectedRows ?? 0}</td></tr></tbody>`; return; }
+      const head = document.createElement('tr'); data.columns.forEach((column) => { const cell = document.createElement('th'); cell.textContent = column; head.appendChild(cell); });
+      const tbody = document.createElement('tbody'); tbody.appendChild(head);
+      data.rows.forEach((row) => { const tr = document.createElement('tr'); row.forEach((value) => { const td = document.createElement('td'); td.textContent = value == null ? 'NULL' : String(value); tr.appendChild(td); }); tbody.appendChild(tr); });
+      table.appendChild(tbody);
+    }
+    async function runSql() {
+      const statement = $('sql-input').value.trim(); if (!statement) return;
+      try { const data = await request('/internal/db-console/sql', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ statement }) }); renderRows(data); $('sql-meta').textContent = `${data.durationMs}ms / ${data.rowCount} rows`; $('sql-error').hidden = true; await refreshLogs(); }
+      catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; }
+    }
+    async function refreshLogs() {
+      try { const data = await request(`/internal/db-console/logs?after=${state.lastSequence}&limit=200`); data.items.forEach((item) => { const line = document.createElement('div'); line.className = `log-line ${item.level.toLowerCase()}`; line.textContent = `${item.time}  ${item.category}  ${item.action}  ${item.message}`; $('logs').appendChild(line); }); state.lastSequence = data.lastSequence; const box = $('logs'); box.scrollTop = box.scrollHeight; }
+      catch (_) { /* status endpoint still shows connection problems */ }
+    }
+    $('run-sql').addEventListener('click', runSql); $('clear-sql').addEventListener('click', () => { $('sql-input').value = ''; $('result-table').innerHTML = '<tbody><tr><td class="empty">执行查询后显示结果</td></tr></tbody>'; }); $('refresh-status').addEventListener('click', refreshStatus); $('sql-input').addEventListener('keydown', (event) => { if (event.ctrlKey && event.key === 'Enter') runSql(); }); document.querySelectorAll('[data-runtime]').forEach((button) => button.addEventListener('click', async () => { if (!confirm(`确认${button.textContent}数据库？`)) return; button.disabled = true; try { await request('/internal/db-console/runtime', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ action: button.dataset.runtime }) }); await refreshStatus(); await refreshLogs(); } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; } }));
+    refreshStatus(); refreshLogs(); setInterval(() => { if ($('auto-refresh').checked) refreshLogs(); }, 2000);
+  </script>
+</body>
+</html>
