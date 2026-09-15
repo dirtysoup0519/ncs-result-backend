@@ -17,6 +17,11 @@
         <button type="button" id="refresh-status">刷新</button>
       </div>
     </header>
+    <section class="panel sync-panel">
+      <div class="panel-heading"><h1>同步动态</h1><span id="sync-meta">数据来源：ctl_import_batch</span></div>
+      <div class="toolbar"><button type="button" id="refresh-sync">刷新</button><label><input type="checkbox" id="sync-auto" checked> 自动刷新</label></div>
+      <div class="table-wrap" style="max-height:240px;overflow:auto"><table id="sync-rows"><tbody><tr><td class="empty">加载中…</td></tr></tbody></table></div>
+    </section>
     <section class="panel schema-panel">
       <div class="panel-heading"><h1>结构</h1><button type="button" id="refresh-schema">刷新</button></div>
       <div class="toolbar"><select id="schema-table"><option value="">选择表…</option></select><span id="schema-meta"></span></div>
@@ -134,7 +139,20 @@ UPDATE ctl_dataset SET description = 'legacy' WHERE dataset_code = 'old';"></tex
     $('drop-table').addEventListener('click', async () => { const name = $('schema-table').value; if (!name) return; if (!confirm(`确认删除表 ${name}（含全部数据与结构）？`)) return; if (!confirm('再次确认：删除后需要重新迁移才能恢复。')) return; try { await request(`/internal/db-console/tables/${encodeURIComponent(name)}/drop`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ confirm: true }) }); await refreshSchema(); await refreshLogs(); } catch (error) { $('sql-error').textContent = error.message; $('sql-error').hidden = false; } });
     $('run-script').addEventListener('click', runScript);
     $('script-input').addEventListener('keydown', (event) => { if (event.ctrlKey && event.shiftKey && event.key === 'Enter') runScript(); });
-    refreshStatus(); refreshLogs(); refreshSchema(); setInterval(() => { if ($('auto-refresh').checked) refreshLogs(); }, 2000);
+    async function refreshSync() {
+      try {
+        const data = await request('/internal/db-console/sync?limit=50');
+        const view = data.rows.map((row) => { const copy = [...row]; copy[0] = copy[0] == null ? '' : String(copy[0]).replace('T', ' ').slice(0, 19); return copy; });
+        renderSimpleTable('sync-rows', ['时间', '数据集', '源批次', '行数', '状态', '错误'], view);
+        $('sync-meta').textContent = `共 ${data.summary.total} 条：已发布 ${data.summary.published}，待处理/失败 ${data.summary.pendingOrFailed}`;
+      } catch (error) {
+        $('sync-rows').innerHTML = `<tbody><tr><td class="empty">${error.message}</td></tr></tbody>`;
+        $('sync-meta').textContent = error.message;
+      }
+    }
+    $('refresh-sync').addEventListener('click', refreshSync);
+    setInterval(() => { if ($('sync-auto').checked) refreshSync(); }, 10000);
+    refreshStatus(); refreshLogs(); refreshSchema(); refreshSync(); setInterval(() => { if ($('auto-refresh').checked) refreshLogs(); }, 2000);
   </script>
 </body>
 </html>

@@ -48,6 +48,54 @@ def test_runtime_and_sql_validation_errors_are_stable(tmp_path):
     assert invalid.json["code"] == "SQL_STATEMENT_REQUIRED"
 
 
+def test_sync_activity_panel(tmp_path):
+    database = tmp_path / "sync.sqlite"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE ctl_import_batch (batch_id TEXT, dataset_code TEXT, schema_version TEXT,"
+        " source_batch_id TEXT, source_uri TEXT, source_sha256 TEXT, data_date TEXT,"
+        " row_count INTEGER, status TEXT, error_summary TEXT,"
+        " created_at TEXT DEFAULT '2026-09-15T20:59:02', updated_at TEXT, published_at TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id,"
+        " source_uri, source_sha256, data_date, row_count, status)"
+        " VALUES ('b1', 'dashboard_overview', '2.2.0', 'ncs_sim', 'u', 'h', '2026-09-14', 6, 'PUBLISHED')"
+    )
+    connection.commit()
+    connection.close()
+    client = create_app(
+        connection_factory=lambda: sqlite3.connect(database),
+        runtime=UnmanagedDatabaseRuntime(),
+        log_store=ConsoleLogStore(),
+    ).test_client()
+
+    result = client.get("/internal/db-console/sync")
+    assert result.status_code == 200
+    data = result.json["data"]
+    assert data["columns"] == ["created_at", "dataset_code", "source_batch_id", "row_count", "status", "error_summary"]
+    assert data["rows"][0][:5] == ["2026-09-15T20:59:02", "dashboard_overview", "ncs_sim", 6, "PUBLISHED"]
+    assert data["summary"] == {"total": 1, "published": 1, "pendingOrFailed": 0}
+
+    bad_limit = client.get("/internal/db-console/sync?limit=abc")
+    assert bad_limit.status_code == 400
+    assert bad_limit.json["code"] == "DB_PAGE_INVALID"
+
+
+def test_sync_activity_reports_missing_table(tmp_path):
+    database = tmp_path / "empty.sqlite"
+    sqlite3.connect(database).close()
+    client = create_app(
+        connection_factory=lambda: sqlite3.connect(database),
+        runtime=UnmanagedDatabaseRuntime(),
+        log_store=ConsoleLogStore(),
+    ).test_client()
+
+    result = client.get("/internal/db-console/sync")
+    assert result.status_code == 409
+    assert result.json["code"] == "SYNC_HISTORY_UNAVAILABLE"
+
+
 def test_page_is_available(tmp_path):
     client = _app(tmp_path).test_client()
     response = client.get("/db-console")

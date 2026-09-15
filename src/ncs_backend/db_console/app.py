@@ -227,6 +227,41 @@ def create_app(
             }
         )
 
+    @app.get("/internal/db-console/sync")
+    def sync_activity():
+        """Recent ADS import batches (ctl_import_batch), newest first."""
+        if factory is None:
+            raise AppError("DB_CONSOLE_NOT_CONFIGURED", "database connection is not configured", 503)
+        try:
+            limit = int(request.args.get("limit", "50"))
+        except ValueError as exc:
+            raise AppError("DB_PAGE_INVALID", "limit must be an integer", 400) from exc
+        if not 1 <= limit <= 500:
+            raise AppError("DB_PAGE_INVALID", "limit must be 1..500", 400)
+        connection = factory()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT created_at, dataset_code, source_batch_id, row_count, status, "
+                f"COALESCE(error_summary, '') AS error_summary FROM ctl_import_batch ORDER BY created_at DESC LIMIT {limit}"
+            )
+            columns = [column[0] for column in cursor.description]
+            rows = [[json_value(value) for value in row] for row in cursor.fetchall()]
+            cursor.close()
+        except Exception as exc:  # noqa: BLE001 - surface a friendly panel error
+            raise AppError("SYNC_HISTORY_UNAVAILABLE", f"sync history unavailable: {str(exc)[:200]}", 409) from exc
+        finally:
+            connection.close()
+        published = sum(1 for row in rows if row[columns.index("status")] == "PUBLISHED")
+        failed = sum(1 for row in rows if row[columns.index("status")] not in ("PUBLISHED", "CREATED"))
+        return _success(
+            {
+                "columns": columns,
+                "rows": rows,
+                "summary": {"total": len(rows), "published": published, "pendingOrFailed": failed},
+            }
+        )
+
     @app.post("/internal/db-console/tables/<table_name>/rows")
     def insert_row(table_name: str):
         payload = request.get_json(silent=True)
