@@ -1,8 +1,9 @@
-"""Scenario tests for scripts/shell/start_ads_sync.sh."""
+"""Scenario tests for scripts/shell/start_ads_sync.sh (zero-config bootstrap)."""
 
 import os
 import signal
 import subprocess
+import textwrap
 import time
 from pathlib import Path
 
@@ -15,102 +16,128 @@ STUB_PYTHON = (
     "#!/usr/bin/env python3\n"
     "import sys\n"
     "args = sys.argv[1:]\n"
-    "sys.exit(0)  # preflight and any import/prediction call succeed\n"
+    "if args and args[0] == '-c':\n"
+    "    sys.exit(0)\n"
+    "sys.exit(0)\n"
 )
-
-
-def _write_env(root: Path, **overrides) -> Path:
-    env_file = root / "ads-sync.env"
-    values = {
-        "NCS_REPO": str(root / "repo"),
-        "NCS_DATABASE_URL": "mysql+pymysql://root@127.0.0.1:3306/ncs_analytics",
-        "NCS_ADS_EXCHANGE_ROOT": str(root / "exchange"),
-        "NCS_PYTHON_BIN": str(root / "stub-python"),
-        "NCS_ADS_SYNC_INTERVAL_SECONDS": "1",
-    }
-    values.update(overrides)
-    lines = [f"export {key}='{value}'" for key, value in values.items()]
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return env_file
 
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    (tmp_path / "repo").mkdir()
-    (tmp_path / "exchange").mkdir()
-    stub = tmp_path / "stub-python"
+    root = tmp_path
+    exchange = root / "exchange"
+    env_file = root / "ads-sync.env"
+    stub = root / "stub-python"
     stub.write_text(STUB_PYTHON, encoding="utf-8")
-    stub.chmod(0o755)
-    env_file = _write_env(tmp_path)
+    stub.chmod(stub.stat().st_mode | 0o111)
+
     values = {
-        "root": tmp_path,
         "env_file": str(env_file),
+        "root": exchange,
+        "NCS_PIP_INSTALL": "0",
+        "NCS_ADS_EXCHANGE_ROOT": str(exchange),  # never touch the network from tests
     }
+    for key, value in values.items():
+        if key.startswith("NCS_"):
+            monkeypatch.setenv(key, value)
     return values
 
 
-def _run(env, *args):
-    result = subprocess.run(
-        ["bash", str(START_SCRIPT), "--env", env["env_file"], *args],
+def _make_env_file(env, extra: dict[str, str] | None = None) -> Path:
+    lines = [
+        f"export NCS_REPO='{REPO_ROOT}'",
+        "export NCS_DATABASE_URL='mysql+pymysql://root@127.0.0.1:3306/ncs_analytics'",
+        f"export NCS_ADS_EXCHANGE_ROOT='{Path(env['env_file']).parent / 'exchange'}'",
+        f"export NCS_PYTHON_BIN='{Path(env['env_file']).parent / 'stub-python'}'",
+        "export NCS_LOG_TZ='Asia/Shanghai'",
+    ]
+    for key, value in (extra or {}).items():
+        lines.append(f"export {key}='{value}'")
+    path = Path(env["env_file"])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _run(env, *args) -> subprocess.CompletedProcess:
+    run_env = {k: str(v) for k, v in os.environ.items()}
+    for key, value in env.items():
+        if key.startswith("NCS_"):
+            run_env[key] = str(value)
+    return subprocess.run(
+        ["bash", str(START_SCRIPT), *args],
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=60,
+        env=run_env,
     )
-    return result
 
 
-def test_missing_env_file_is_rejected(tmp_path):
-    result = subprocess.run(
-        ["bash", str(START_SCRIPT), "--env", str(tmp_path / "nope.env"), "--once"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert result.returncode == 2
-    assert "env file not found" in result.stderr
+def _dirs_exist(exchange: Path) -> bool:
+    return all((exchange / name).is_dir() for name in ("ready", "processing", "archive", "rejected", "logs", "locks"))
 
 
-def test_missing_required_variable_is_rejected(tmp_path):
-    env_file = tmp_path / "ads-sync.env"
-    env_file.write_text("export NCS_ADS_EXCHANGE_ROOT='/tmp/x'\n", encoding="utf-8")
-    result = subprocess.run(
-        ["bash", str(START_SCRIPT), "--env", str(env_file), "--once"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert result.returncode != 0
-    assert "NCS_REPO" in result.stderr
+def test_fresh_machine_generates_env_and_runs_once(env):
+    env_file = Path(env["env_file"])
+    assert not env_file.exists()
+
+    result = _run(env, "--env", str(env_file), "--once")
+
+    assert result.returncode == 0, result.stderr
+    assert env_file.exists()
+    content = env_file.read_text(encoding="utf-8")
+    assert f"NCS_REPO='{REPO_ROOT}'" in content
+    assert "NCS_DATABASE_URL='mysql+pymysql://root@127.0.0.1:3306/ncs_analytics'" in content
+    assert "NCS_PYTHON_BIN=" in content
+    assert "NCS_LOG_TZ='Asia/Shanghai'" in content
+    assert _dirs_exist(Path(env["root"]))
+    assert "sync_ads_once exit=0" in result.stdout
 
 
-def test_once_runs_single_round_and_creates_directories(env):
-    result = _run(env, "--once")
+def test_fresh_machine_honors_db_url(env):
+    env_file = Path(env["env_file"])
+
+    result = _run(env, "--env", str(env_file), "--db-url", "mysql+pymysql://root@10.0.0.5:3306/ncs_analytics", "--once")
 
     assert result.returncode == 0
-    assert "sync_ads_once exit=0" in result.stdout
-    exchange = Path(env["env_file"]).parent / "exchange"
-    for name in ("ready", "archive", "rejected", "logs", "locks"):
-        assert (exchange / name).is_dir()
+    assert "NCS_DATABASE_URL='mysql+pymysql://root@10.0.0.5:3306/ncs_analytics'" in env_file.read_text(encoding="utf-8")
+
+
+def test_existing_env_with_stub_python_once(env):
+    _make_env_file(env)
+
+    result = _run(env, "--env", str(env["env_file"]), "--once")
+
+    assert result.returncode == 0
+    assert _dirs_exist(Path(env["root"]))
+
+
+def test_stop_without_watcher_fails_cleanly(env):
+    _make_env_file(env)
+
+    result = _run(env, "--env", str(env["env_file"]), "--stop")
+
+    assert result.returncode == 1
+    assert "not running" in result.stdout
 
 
 def test_detach_start_twice_and_stop(env):
-    result = _run(env, "--detach")
+    _make_env_file(env)
+
+    result = _run(env, "--env", str(env["env_file"]), "--detach")
     assert result.returncode == 0
 
-    exchange = Path(env["env_file"]).parent / "exchange"
-    pid_file = exchange / "locks" / "watch_ads.pid"
+    pid_file = Path(env["root"]) / "locks" / "watch_ads.pid"
     deadline = time.time() + 5
     while time.time() < deadline and not pid_file.exists():
         time.sleep(0.1)
     assert pid_file.exists()
     pid = int(pid_file.read_text().strip())
 
-    # Second detach must refuse to start a duplicate watcher.
-    duplicate = _run(env, "--detach")
+    duplicate = _run(env, "--env", str(env["env_file"]), "--detach")
     assert duplicate.returncode == 1
-    assert "already running" in duplicate.stderr
+    assert "already running" in duplicate.stdout
 
-    stop = _run(env, "--stop")
+    stop = _run(env, "--env", str(env["env_file"]), "--stop")
     assert stop.returncode == 0
     deadline = time.time() + 5
     while time.time() < deadline:
