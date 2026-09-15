@@ -531,6 +531,29 @@ PowerShell（Windows）：
 
 仅使用 Windows 手工导入时可以跳过本节。自动同步要求虚拟机额外具备 Python 3.11/3.12。不要替换 CentOS 自带 Python，否则可能破坏 `yum`；应使用独立 Python 或 Conda 环境。
 
+同步脚本的可靠性约定（2026-09 起）：
+
+- **选包不阻塞**：只挑选带完成标记（`*.zip.ready` / `*.zip.ready.predict` 或目录内 `_SUCCESS`）的最旧批次；上游未写完的包会被自动跳过，不会阻塞后续已完成批次。
+- **导入重试**：导入命令按异常类型返回退出码（30=数据问题、40=MySQL 暂不可用、50=内部错误）。30 立即进入 `rejected`；40/50 由 `NCS_ADS_SYNC_MAX_ATTEMPTS`（默认 3）控制重试次数，`.attempts` 计数文件与包同目录，超过上限才进入 `rejected`。
+- **预测重试**：预测失败不回滚已发布的 ADS；包留在 `ready/`，完成标记改名为 `.ready.predict`，下一轮只重跑预测。重试到上限后包进入 `archive/`（数据已发布），日志标记 `predictionFailed`。
+- **_SUCCESS 目录模式**：上游也可交付 `ready/<batchId>/` 目录（内含 `_SUCCESS` 文件），脚本与 ZIP 包同等处理。
+- **Python 版本预检**：脚本用 `NCS_PYTHON_BIN`（默认 `python3`）指定的解释器执行导入；版本低于 3.11 时在日志输出 WARNING，不中断同步。
+- **日志时区**：脚本内 `date -Is` 固定使用 `NCS_LOG_TZ`（默认 `Asia/Shanghai`），与虚拟机系统时区无关。
+
+虚拟机环境前置检查（一次性，root 执行）：
+
+```bash
+# 时区必须为 Asia/Shanghai（历史上曾误配为 Asia/Seoul）
+timedatectl set-timezone Asia/Shanghai
+timedatectl | grep 'Time zone'
+
+# NTP 同步（CentOS 7 用 chrony）
+yum install -y chrony && systemctl enable --now chronyd
+chronyc tracking | grep -E 'System time|Leap'
+```
+
+Linux 下克隆仓库后脚本执行位已内嵌在 Git 中，无需再 `chmod +x`；仅 Windows 克隆后复制到虚拟机时需要。
+
 将后端仓库放在当前用户目录的 `./ncs-result-backend/`，进入仓库后创建相邻运行目录：
 
 ```bash
