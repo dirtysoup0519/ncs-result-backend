@@ -164,6 +164,44 @@ def test_unavailable_prediction_uses_frozen_null_contract(tmp_path):
     }
 
 
+def test_prediction_forecast_hour_extends_across_midnight(tmp_path):
+    database = tmp_path / "cross_day.sqlite"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE api_v1_load_prediction (
+            series_type TEXT, target_time TEXT, order_count INTEGER, charging_energy TEXT,
+            lower_bound TEXT, upper_bound TEXT, prediction_date TEXT, cutoff_hour INTEGER,
+            forecast_start_at TEXT, interval_available INTEGER, confidence_level TEXT,
+            model_version TEXT, prediction_run_id TEXT, generated_at TEXT,
+            data_version TEXT, staleness TEXT
+        );
+        INSERT INTO api_v1_load_prediction VALUES
+          ('ACTUAL',   '2019-09-13T15:00:00+08:00', 8,   '12.00', NULL, NULL, '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('ACTUAL',   '2019-09-13T17:00:00+08:00', 9,   '13.00', NULL, NULL, '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-13T17:00:00+08:00', NULL, '13.50', '11.00', '16.00', '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-13T23:00:00+08:00', NULL, '11.20', '9.90', '12.40', '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-14T00:00:00+08:00', NULL, '10.00', '8.80', '11.20', '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-14T16:00:00+08:00', NULL, '7.30', '6.00', '8.60', '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('FORECAST', '2019-09-15T00:00:00+08:00', NULL, '6.00', '5.00', '7.00', '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH'),
+          ('ACTUAL',   '2019-09-14T05:00:00+08:00', 3,   '2.00', NULL, NULL, '2019-09-13', 17, '2019-09-13T17:00:00+08:00', 1, '0.95', 'model:b1', 'run:b1', '2026-09-13T06:00:00+08:00', 'pred:b1', 'FRESH');
+        """
+    )
+    connection.commit()
+    connection.close()
+    repository = DbApiDashboardRepository(lambda: sqlite3.connect(database))
+
+    prediction = repository.fetch("prediction", {"date": "2019-09-13", "cutoffHour": 17})
+
+    # Actuals stay on the business date and before the cutoff.
+    assert [point["hour"] for point in prediction.data["actual"]] == [15]
+    # Forecast hours are continuous offsets from the business date's 0:00,
+    # so next-day rows become 24 (00:00) and 40 (16:00).
+    assert [point["hour"] for point in prediction.data["forecast"]] == [17, 23, 24, 40]
+    # forecastStartAt keeps pointing at the business date, not the next day.
+    assert prediction.data["forecastStartAt"] == "2019-09-13T17:00:00+08:00"
+
+
 def test_mysql_naive_timestamp_is_serialized_as_utc():
     value = _datetime_value("2026-09-14 09:06:27")
 

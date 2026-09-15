@@ -433,10 +433,14 @@ class DbApiDashboardRepository:
         forecast = []
         cutoff = params.get("cutoffHour")
         requested_date = _date_value(params.get("date"))
-        business_midnight = datetime(requested_date.year, requested_date.month, requested_date.day, tzinfo=_BUSINESS_TIMEZONE)
+        business_midnight = (
+            datetime(requested_date.year, requested_date.month, requested_date.day, tzinfo=_BUSINESS_TIMEZONE)
+            if requested_date is not None
+            else None
+        )
         for row in rows:
             target_time = _business_datetime_value(row.get("target_time"))
-            if target_time is None:
+            if target_time is None or requested_date is None or business_midnight is None:
                 continue
             if row.get("series_type") == "ACTUAL":
                 # History always stays on the business date, before the cutoff.
