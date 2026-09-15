@@ -1,288 +1,464 @@
 # NCS 结果库与后端
 
-本仓库负责新能源汽车充电桩项目的后半段链路：接收上游 Spark/Hive ADS 结果，批次化发布到 MySQL 结果库，通过 Flask 提供大屏查询接口，并使用外部提供的模型与权重生成预测结果。模型训练、ODS/DWD/DWS/ADS 生产逻辑和前端源码不在本仓库范围。
+## 1. 项目简介
 
-当前基线为 ADS Spark v2.5、MySQL 5.7.35、Python 3.11/3.12、Flask、Vue 3 与 Node.js 23+。虚拟机 MySQL、18个ADS数据集、10个查询视图、测试模型推理和前端预测接口均已完成真实联调。统一业务、架构和后续规划见 `docs/项目业务架构与代码规划.md`。
+本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的 ADS v2.5 数据包，校验并发布到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
 
-查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。查询账号只允许读取固定视图，管理账号负责数据导入，迁移账号负责结构变更；应用不得使用 MySQL `root`。
+本仓库负责：
 
-## 当前运行结构
+- ADS 交接包校验、幂等导入、质量检查、发布和回滚；
+- MySQL 结果表、控制表和稳定的 `api_v1_*` 查询视图；
+- 面向前端的 Flask 查询 API；
+- 数据库简易管理窗口；
+- 使用已经训练好的模型和权重完成推理及预测发布；
+- Windows 手工导入与虚拟机 Shell 自动同步两个入口。
+
+本仓库不负责：
+
+- ODS、DWD、DWS、ADS 的生产计算；
+- 模型训练、调参和评估；
+- 修改前端源码；
+- Hadoop、Hive 和 Spark 集群运维。
+
+当前技术基线：
+
+| 组件 | 要求 |
+| --- | --- |
+| Hadoop | 3.x，由上游负责 |
+| ADS | Spark v2.5，18 个数据集 |
+| MySQL | 5.7.x 或 8.0，当前验证版本为 5.7.35 |
+| Python | 3.11 或 3.12 |
+| 后端 | Flask + PyMySQL |
+| 前端 | Vue 3 + DataV，Node.js 23+ |
+
+应用不得使用 MySQL `root`。迁移账号负责结构变更，管理账号负责数据导入，查询账号只允许读取固定的 `api_v1_*` 视图。密码只能保存到 Git 忽略的本地配置中，不能写入仓库文件。
+
+## 2. 项目架构
 
 ```text
 上游 Spark/Hive ADS
-  -> ADS v2.5 ZIP/TAR.GZ + .ready
-  -> 虚拟机 Shell 自动同步
-  -> 虚拟机 MySQL 5.7.35 / ncs_analytics
+  -> ADS v2.5 ZIP/TAR.GZ + 完成标记
+  -> 数据入口
+       ├─ Windows 手工导入
+       └─ 虚拟机 Shell 自动同步
+  -> 统一 Python 校验、幂等、事务和发布逻辑
+  -> 虚拟机 MySQL / ncs_analytics
+       ├─ ctl_*      控制、批次、质量和发布记录
+       ├─ stg_*      导入暂存
+       ├─ rpt_*      结果数据
+       └─ api_v1_*   面向查询后端的稳定视图
   -> Windows Flask API :5000
-  -> Vue 3 大屏 :5173
+  -> Vue 3/DataV 大屏 :5173
 
 外部模型包 + 已发布 load_hourly
-  -> 后端模型适配器与推理
-  -> api_v1_load_prediction
+  -> 后端模型适配与推理
+  -> 预测结果表和 api_v1_load_prediction
   -> 大屏 AI 预测组件
 ```
 
-MySQL 固定运行在虚拟机 `192.168.176.100:3306`。数据管理同时支持 Windows 远程导入和虚拟机就地自动导入；前端源码位于独立目录，仅作为只读联调对象。
+两个数据入口只负责发现和提交数据，不允许各写一套业务逻辑。相同 `sourceBatchId + packageChecksum` 重复提交时只能产生一次有效发布。新批次失败时继续保留旧的已发布批次；预测失败不回滚已经成功发布的 ADS 数据。
 
-## 虚拟机自动同步
-
-当前自动同步部署在：
+推荐目录结构如下，仓库内命令均从 `ncs-result-backend` 根目录执行：
 
 ```text
-代码：/home/hadoop/ncs-result-backend
-运行环境：/home/hadoop/ncs-runtime/venv
-本地配置：/home/hadoop/ncs-runtime/ads-sync.env
-交换目录：/home/hadoop/ncs-ads-exchange
-日志：/home/hadoop/ncs-ads-exchange/logs
+workspace/
+├── ncs-result-backend/
+├── ncs-dashboard/
+│   └── ncs-dashboard/
+├── ncs-runtime/          # 虚拟机运行环境和私密配置，不进入 Git
+└── ncs-ads-exchange/     # 虚拟机 ADS 交换目录，不进入 Git
 ```
 
-轮询脚本默认每30秒检查一次，并通过用户 `crontab @reboot` 随虚拟机启动。上游必须先完整上传数据包，再创建同名完成标记：
+运行位置：
+
+| 部分 | 位置 | 数据库地址 |
+| --- | --- | --- |
+| MySQL | 虚拟机 | 本机服务 |
+| Flask 查询 API | Windows | 虚拟机 IP |
+| Windows 手工导入 | Windows | 虚拟机 IP |
+| Shell 自动同步 | 虚拟机 | `127.0.0.1` |
+| Vue 大屏 | Windows | `http://127.0.0.1:5000` |
+
+## 3. 安装与启动
+
+### 3.1 虚拟机最低条件
+
+假设虚拟机初始状态只有 `hadoop` 用户和 Hadoop 3.x。先确认 `hadoop` 具有 sudo 权限，并记录虚拟机 IP 和 Windows VMware 网卡 IP。
+
+bash（虚拟机）：
+
+```bash
+whoami
+hostname -I
+sudo -v
+timedatectl
+sudo timedatectl set-timezone Asia/Shanghai
+```
+
+PowerShell（Windows）：
+
+```powershell
+Get-NetIPAddress -AddressFamily IPv4
+Test-Connection <VM-IP> -Count 2
+```
+
+后续示例使用：
 
 ```text
-/home/hadoop/ncs-ads-exchange/ready/<package>.zip
-/home/hadoop/ncs-ads-exchange/ready/<package>.zip.ready
+虚拟机：192.168.176.100
+Windows VMware 网卡：192.168.176.1
+MySQL：3306
 ```
 
-服务只处理同时存在数据包和 `.ready` 的任务。成功文件进入 `archive/`，失败文件进入 `rejected/`，半包不会导入。支持 `.zip` 和 `.tar.gz`，包内必须且只能识别到一个 `manifest.json`。
+实际地址不同时必须替换，不能直接照抄。
 
-虚拟机检查命令：
+### 3.2 安装虚拟机基础工具
+
+bash（虚拟机）：
+
+```bash
+sudo yum install -y git curl wget unzip tar util-linux cronie
+sudo systemctl enable --now crond
+git --version
+flock --version
+crontab -l
+```
+
+`util-linux` 提供 `flock`，`cronie` 提供 `cron/crontab`。只使用 Windows 手工导入时可以暂不配置 cron，但 MySQL 必须安装。
+
+### 3.3 安装和配置 MySQL
+
+为保持实训环境一致，优先使用与原虚拟机相同的 MySQL 5.7 RPM 包。将安装包放在当前用户目录下的 `./mysql57-rpms/`，然后执行：
+
+```bash
+cd ./mysql57-rpms
+sudo yum localinstall -y ./*.rpm
+```
+
+如果已经配置可用的 MySQL 5.7 Community 仓库，可以执行：
+
+```bash
+sudo yum install -y mysql-community-server
+```
+
+不要同时混装 MariaDB 和 MySQL Community Server。确认安装结果：
+
+```bash
+rpm -qa | grep -Ei 'mysql|mariadb'
+which mysqld
+mysqld --version
+```
+
+使用下面的命令查找系统实际读取的 MySQL 配置文件：
+
+```bash
+mysqld --verbose --help 2>/dev/null | sed -n '/Default options are read from/,+1p'
+```
+
+在该系统配置文件的 `[mysqld]` 段设置：
+
+```ini
+[mysqld]
+port=3306
+bind-address=0.0.0.0
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+default-time-zone='+08:00'
+```
+
+配置中不得存在：
+
+```ini
+skip-grant-tables
+skip-networking
+```
+
+检查有效启动参数：
+
+```bash
+my_print_defaults mysqld | grep -Ei 'skip-grant|skip-networking|bind-address|port'
+sudo systemctl enable mysqld
+sudo systemctl restart mysqld
+sudo systemctl status mysqld --no-pager
+sudo ss -lntp | grep ':3306'
+```
+
+如果修改过 systemd 服务覆盖配置，重启前先运行：
+
+```bash
+sudo systemctl daemon-reload
+```
+
+### 3.4 设置 MySQL root 并退出恢复模式
+
+全新 MySQL 5.7 通常会在日志中生成临时 root 密码。找到临时密码并登录：
+
+```bash
+sudo grep 'temporary password' /var/log/mysqld.log | tail -n 1
+mysql -uroot -p
+```
+
+以下命令只能在 `mysql>` 提示符中执行：
+
+```sql
+ALTER USER 'root'@'localhost' IDENTIFIED BY '<strong-root-password>';
+FLUSH PRIVILEGES;
+SHOW VARIABLES LIKE 'skip_grant_tables';
+```
+
+`skip_grant_tables` 必须为 `OFF`。如果为 `ON`，退出 MySQL，删除系统 MySQL 配置中的 `skip-grant-tables`，然后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart mysqld
+mysql -uroot -p -e "SHOW VARIABLES LIKE 'skip_grant_tables';"
+```
+
+`--skip-grant-tables` 只用于密码恢复。在该模式下 MySQL 会拒绝 `CREATE USER`、`ALTER USER` 和 `GRANT`，项目初始化脚本无法运行。
+
+### 3.5 配置虚拟机防火墙
+
+只向 Windows VMware 网卡放行 3306，不要向公共网络开放。
+
+bash（虚拟机）：
+
+```bash
+sudo systemctl is-active firewalld
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.176.1/32" port protocol="tcp" port="3306" accept'
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-rich-rules
+```
+
+如果 `firewalld` 未运行，应先确认虚拟机网络隔离方式，不要盲目修改防火墙服务。Windows 验证：
+
+```powershell
+Test-NetConnection 192.168.176.100 -Port 3306
+```
+
+只有 `TcpTestSucceeded : True` 才继续。
+
+### 3.6 临时允许 Windows 完成首次初始化
+
+当前 Windows 初始化脚本需要一次 root 连接来建库、建账号和授权。不要创建 `root@'%'`，只临时允许 Windows VMware 地址。
+
+在虚拟机执行 `mysql -uroot -p`，然后在 `mysql>` 中执行：
+
+```sql
+CREATE USER IF NOT EXISTS 'root'@'192.168.176.1'
+  IDENTIFIED BY '<strong-root-password>';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.176.1' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SELECT User, Host FROM mysql.user WHERE User = 'root';
+```
+
+### 3.7 准备 Windows 开发环境
+
+Windows 必须安装：
+
+- Python 3.11 或 3.12；
+- Git；
+- Node.js 23+，仅启动前端时需要。
+
+将后端和前端放到“项目架构”所示的相邻目录。进入后端仓库根目录后检查：
+
+```powershell
+python --version
+git branch --show-current
+Test-Path .\scripts\setup_new_machine.ps1
+Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
+```
+
+如果前端目录不同，调整为推荐目录；不要修改前端源码来适配本机路径。
+
+### 3.8 一键建库、建账号和生成本地配置
+
+在后端仓库根目录双击 `./setup_new_machine.cmd`，或在 PowerShell 中运行：
+
+```powershell
+.\scripts\setup_new_machine.ps1 `
+  -VmHost 192.168.176.100 `
+  -MysqlPort 3306
+```
+
+脚本依次完成：
+
+1. 检查虚拟机 MySQL 端口；
+2. 检查 Python 3.11/3.12；
+3. 创建 `./.venv/` 并安装项目依赖；
+4. 在窗口中隐藏输入 root 和三个应用账号密码；
+5. 检查 MySQL 没有运行在 `skip-grant-tables`；
+6. 创建 `ncs_analytics`、控制表、结果表、索引和视图；
+7. 创建并验证 `ncs_ads_migrator`、`ncs_ads_admin`、`ncs_ads_reader`；
+8. 生成 Git 忽略的 `./.local/ncs.env`。
+
+默认 `AccountHost=%` 用于学生隔离网络中的双入口：Windows 和虚拟机均可使用应用账号。部署到非隔离网络时必须按来源分别创建账号，不能使用 `%`。
+
+成功标志：
+
+```text
+READY: MySQL schema, accounts and grants are ready.
+Local config written to .../.local/ncs.env
+```
+
+脚本可重复执行。依赖已经安装时可以跳过重复安装：
+
+```powershell
+.\scripts\setup_new_machine.ps1 `
+  -VmHost 192.168.176.100 `
+  -MysqlPort 3306 `
+  -SkipDependencyInstall
+```
+
+完成后回到虚拟机，删除临时远程 root，只保留 `root@localhost`：
+
+```sql
+DROP USER IF EXISTS 'root'@'192.168.176.1';
+FLUSH PRIVILEGES;
+```
+
+### 3.9 导入 ADS 数据
+
+初始化只创建数据库结构，不会自动生成业务数据。先将最新 ADS v2.5 包解压到后端仓库相邻目录，例如 `../ads-v25/`。
+
+PowerShell（Windows，在后端仓库根目录）：
+
+```powershell
+Get-Content .\.local\ncs.env | ForEach-Object {
+  if ($_ -match '^([^#=]+)=(.*)$') {
+    Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+  }
+}
+
+.\.venv\Scripts\python.exe .\scripts\import_ads_v23.py `
+  --package ..\ads-v25 `
+  --database-url $env:NCS_MYSQL_ADMIN_URL `
+  --skip-initialize
+```
+
+脚本名称保留 `v23` 是为了兼容旧调用，当前实现会根据 Manifest 识别并导入 ADS v2.5 的 18 个数据集。
+
+### 3.10 启动后端和前端
+
+PowerShell（Windows，在后端仓库根目录）：
+
+```powershell
+Test-Path .\.local\ncs.env
+.\start_project.cmd
+```
+
+启动脚本会读取 `./.local/ncs.env`，自动寻找 `../ncs-dashboard/ncs-dashboard/`，并启动：
+
+- 查询 API：`http://127.0.0.1:5000`；
+- Vue 大屏：`http://localhost:5173`。
+
+数据库简易管理窗口按需单独启动：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_db_console.py
+```
+
+访问 `http://127.0.0.1:5002/db-console`。窗口只负责连接检查、日志和受控 SQL，不负责远程启动或停止虚拟机 MySQL。
+
+端口 `5000` 或 `5173` 已被占用时，启动脚本会保留已有进程。修改代码或配置后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动。
+
+### 3.11 运行测试
+
+PowerShell（Windows）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+需要连接真实 MySQL 的环境测试必须使用虚拟机 MySQL；默认测试中的少量跳过项表示未提供真实 MySQL、ADS 包或预测依赖，不代表单元测试失败。
+
+### 3.12 可选：部署虚拟机 Shell 自动同步
+
+仅使用 Windows 手工导入时可以跳过本节。自动同步要求虚拟机额外具备 Python 3.11/3.12。不要替换 CentOS 自带 Python，否则可能破坏 `yum`；应使用独立 Python 或 Conda 环境。
+
+将后端仓库放在当前用户目录的 `./ncs-result-backend/`，进入仓库后创建相邻运行目录：
+
+```bash
+cd ./ncs-result-backend
+python3.11 -m venv ../ncs-runtime/venv
+../ncs-runtime/venv/bin/pip install -e '.[mysql]'
+mkdir -p ../ncs-ads-exchange/{ready,processing,archive,rejected,logs,locks}
+cp ./scripts/shell/ncs_ads_sync.env.example ../ncs-runtime/ads-sync.env
+chmod 600 ../ncs-runtime/ads-sync.env
+chmod +x ./scripts/shell/*.sh
+```
+
+如果系统没有 `python3.11`，先通过独立 Conda 环境或离线 Python 3.11/3.12 安装包提供该命令，再继续。不要用 Python 3.10 作为最终验收环境。
+
+编辑 `../ncs-runtime/ads-sync.env`：
+
+```bash
+export NCS_REPO=.
+export NCS_DATABASE_URL='mysql+pymysql://ncs_ads_admin:<admin-password>@127.0.0.1:3306/ncs_analytics'
+export NCS_ADS_EXCHANGE_ROOT=../ncs-ads-exchange
+export NCS_ADS_SYNC_INTERVAL_SECONDS=30
+export PATH=../ncs-runtime/venv/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+暂不需要预测时不要设置 `NCS_MODEL_PACKAGE`。
+
+先手工执行一次：
+
+```bash
+source ../ncs-runtime/ads-sync.env
+./scripts/shell/sync_ads_once.sh
+echo $?
+```
+
+没有新包时退出码应为 `0`。投递真实包时，必须先完整复制数据包，再创建同名完成标记：
+
+```bash
+cp ../incoming/package.zip ../ncs-ads-exchange/ready/package.zip
+touch ../ncs-ads-exchange/ready/package.zip.ready
+./scripts/shell/sync_ads_once.sh
+tail -n 100 ../ncs-ads-exchange/logs/sync_ads.log
+```
+
+成功后数据包和标记进入 `../ncs-ads-exchange/archive/`；失败时进入 `../ncs-ads-exchange/rejected/`，详细错误写入 `../ncs-ads-exchange/logs/`。
+
+前台验证轮询：
+
+```bash
+source ../ncs-runtime/ads-sync.env
+./scripts/shell/watch_ads.sh
+```
+
+确认正常后按 `Ctrl+C` 停止，再在 `hadoop` 用户的 `crontab -e` 中加入：
+
+```cron
+@reboot cd ./ncs-result-backend && /bin/bash -lc 'source ../ncs-runtime/ads-sync.env; exec ./scripts/shell/watch_ads.sh >> ../ncs-ads-exchange/logs/watch.log 2>&1'
+```
+
+立即启动一次：
+
+```bash
+cd ./ncs-result-backend
+nohup /bin/bash -lc 'source ../ncs-runtime/ads-sync.env; exec ./scripts/shell/watch_ads.sh' \
+  >> ../ncs-ads-exchange/logs/watch.log 2>&1 &
+```
+
+检查：
 
 ```bash
 ps -ef | grep '[w]atch_ads.sh'
 crontab -l
-tail -f /home/hadoop/ncs-ads-exchange/logs/sync_ads.log
-find /home/hadoop/ncs-ads-exchange/ready -maxdepth 1 -type f
-find /home/hadoop/ncs-ads-exchange/rejected -maxdepth 1 -type f
+tail -f ../ncs-ads-exchange/logs/sync_ads.log
 ```
 
-当前虚拟机系统Python仍为3.10.13，自动ADS导入已经验证可运行；正式验收环境必须升级到项目要求的Python 3.11或3.12。模型自动推理尚未在虚拟机常驻任务中启用，因为虚拟机还需安装PyTorch并部署模型包。
+不要同时运行多个 watcher，也不要同时配置每分钟 cron；脚本内部已经每 30 秒轮询并使用 `flock` 防止并发。
 
-## 前后端联调
+### 3.13 常见错误
 
-数据库密码放在被忽略的 `.local/ncs.env`。前端只访问查询API，不直接连接MySQL。启动查询服务：
+`The MySQL server is running with --skip-grant-tables`：MySQL 仍处于密码恢复模式。删除有效配置中的 `skip-grant-tables`，重启 `mysqld`，确认 `skip_grant_tables=OFF` 后重新运行初始化。
 
-```powershell
-python scripts/run_query.py
-```
+`Missing ./.local/ncs.env`：建库初始化尚未成功，先运行 `./setup_new_machine.cmd`，不要手工把密码写入 Git 文件。
 
-前端位于相邻目录时，可以使用：
+`Access denied for user`：进入 MySQL 后执行 `SELECT USER(), CURRENT_USER();`，检查实际匹配的账号主机。`user@localhost`、`user@node100` 和 `user@192.168.176.1` 是不同账号。
 
-```powershell
-.\start_project.cmd
-```
+Windows 显示 `TcpTestSucceeded : False`：检查虚拟机 IP、MySQL 服务、`bind-address`、3306 监听和防火墙来源地址。
 
-启动脚本检测到 `5000` 或 `5173` 已被占用时会保留已有进程，不会自动重启。代码或 `.env.local` 变化后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动，否则页面可能仍使用旧接口或旧配置。
-
-当前测试预测批次参数为：
-
-```dotenv
-VITE_PREDICTION_DATE=2015-12-28
-VITE_PREDICTION_CUTOFF_HOUR=17
-```
-
-这些参数只用于当前测试数据。ADS刷新并重新生成预测后，必须同步更新前端本地配置，或后续改为由后端元数据动态提供。
-
-## 环境准备与前置工作（新成员必读）
-
-> 按项目纪律，所有环境要求和前置工作以本章为准并保持更新；细节设计可再读 `docs/`，但接入步骤以本章为唯一入口。
-
-### 1. 前置软件
-
-| 软件 | 版本要求 | 用途 |
-| --- | --- | --- |
-| Python | 3.11 或 3.12（验收固定） | 后端全部服务与脚本 |
-| Git | 任意较新版本 | 拉取仓库；推送需已配置的 SSH 密钥或账号凭据 |
-| MySQL | 5.7 或 8.0 | 真实结果库（可选，本地开发可用 SQLite 免装） |
-| Node.js | 23 及以上 | 仅前端 `ncs-dashboard` 需要，后端开发可不装 |
-| bash + flock + cron | 常见 Linux 工具 | 仅虚拟机 Shell 自动同步需要（`scripts/shell/`，当前分支） |
-
-### 2. 创建环境并安装依赖
-
-PowerShell（Windows 实训环境）：
-
-```powershell
-python -m venv .venv
-.venv\Scripts\pip install -e ".[dev,mysql]"
-```
-
-bash（Linux/虚拟机）：
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev,mysql]"
-```
-
-依赖组说明：
-
-- 默认仅依赖 `Flask`，足以运行全部单元测试（SQLite 路径）。
-- `mysql` 组提供 `PyMySQL`，连接真实 MySQL（含集成测试和 Shell 同步）时必须安装。
-- `dev` 组提供 `pytest`。
-- 预测功能（`src/ncs_backend/prediction/`）运行时额外需要 `numpy` 和 `torch`，未声明为包依赖，按需手动 `pip install numpy torch`；不装不影响结果库与查询功能，仅张量构建相关测试会报缺少依赖的明确错误。
-
-### 3. 环境变量与本地配置
-
-仓库不保存真实凭据。本地配置统一放在被 Git 忽略的 `.local/ncs.env`，启动脚本会自动加载；现有进程环境变量优先。模板见 `config/handoff.example`。
-
-关键变量：
-
-| 变量 | 必填场景 | 说明 |
-| --- | --- | --- |
-| `NCS_DATABASE_URL` | 连接数据库时 | 例如 `sqlite:///.local/ncs.sqlite` 或 `mysql+pymysql://ncs_ads_admin:<密码>@127.0.0.1:3306/ncs_analytics` |
-| `NCS_QUERY_HOST` / `NCS_QUERY_PORT` | 跨机器联调时 | 默认 `127.0.0.1:5000`，管理/控制台默认只绑本机 |
-| `NCS_QUERY_API_KEY` | 前端跨机访问时 | 只读查询接口的开发 API Key |
-| `NCS_CORS_ORIGINS` | 浏览器联调时 | 允许的前端 Origin 白名单，逗号分隔 |
-| `NCS_MYSQL_MIGRATOR_URL` / `NCS_MYSQL_ADMIN_URL` / `NCS_MYSQL_READER_URL` / `NCS_MYSQL_PRIVILEGED_URL` | 真实 MySQL 迁移与验收时 | 三账号权限体系，root/特权账号仅迁移授权时使用 |
-| `NCS_ADS_EXCHANGE_ROOT` / `NCS_ADS_SYNC_INTERVAL_SECONDS` 等 | Shell 自动同步（当前分支） | 见 `scripts/shell/ncs_ads_sync.env.example` 与 `docs/ADS_v2.5自动同步与模型推理设计.md` |
-
-### 4. 首次本地初始化与自检
-
-初始化完整本地开发库（控制表、staging、迁移记录，可重复执行）：
-
-```powershell
-python scripts/init_local_database.py --sqlite .local/ncs.sqlite
-python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
-```
-
-运行全部测试确认环境就绪（预期 `N passed, 2 skipped`；跳过项是需要真实 MySQL 与 ADS 包路径的集成测试）：
-
-```powershell
-python -m pytest
-```
-
-### 5. 服务启动速查
-
-三个服务的统一入口（会先幂等初始化开发库），默认端口 `admin=5001`、`query=5000`、`console=5002`：
-
-```powershell
-python scripts/run_local.py admin    # 或 query / console
-```
-
-等价的单独入口：`scripts/run_query.py`、`scripts/run_admin.py`、`scripts/run_db_console.py`。Windows 联调可双击 `start_project.cmd` 同时启动后端与相邻目录的 Vue 前端。
-
-### 6. 接入真实 MySQL（可选）
-
-按 `docs/仓库下载与联调操作手册.md` 第 8～10 节操作；命令入口：
-
-```powershell
-python scripts/setup_mysql_ads.py --initialize --grant-reader --verify   # 迁移+授权+自检
-python scripts/verify_mysql_e2e.py                                        # 完整端到端验收
-python scripts/verify_dual_entry_idempotency.py                           # 双入口幂等验收（当前分支）
-python scripts/verify_result_query.py                                     # 结果表内部查询验收（当前分支）
-```
-
-`verify_result_query.py` 检查全部 20 张 `rpt_*` 结果表经 `GET /internal/v1/ads-result/tables/*` 均可查询并显示行数；默认先导入一个合成的 v2.5 样例包，`--skip-import` 可只查现有数据，`--allow-empty` 放行空表。
-
-`verify_dual_entry_idempotency.py` 覆盖：首次导入、重复导入不重复发布、失败导入完整回滚三步；同一包通过 CLI 入口与管理服务入口重复提交，数据库状态必须保持不变。不提供 `--package` 时自动合成 18 数据集的 v2.5 样例包；`--database-url` 指向真实 MySQL 时即为上机验收形态，本地默认用 SQLite 预演。
-
-## 本地验证
-
-```powershell
-python -m pytest
-```
-
-启动查询服务：
-
-```powershell
-python scripts/run_query.py
-```
-
-Windows 联调环境也可以双击仓库根目录的 `start_project.cmd`，一次启动查询后端和位于相邻目录 `../ncs-dashboard/ncs-dashboard` 的 Vue 前端，并自动打开 `http://localhost:5173/`。该脚本按当前学生实训环境固定连接虚拟机 MySQL；如果目录或虚拟机地址变化，需要先修改脚本顶部配置。
-
-启动内部管理服务：
-
-```powershell
-python scripts/run_admin.py
-```
-
-数据库未配置时，`/health/live` 应返回存活，`/health/ready` 会明确返回未就绪；这不是数据库连接验证。
-
-当前合同样例位于 `contracts/examples/`。这些样例用于验证内部协议，不代表上游真实字段已经确认。
-
-校验一份 Schema、Manifest 和 JSON 样例：
-
-```powershell
-python scripts/admin_cli.py validate-delivery `
-  --schema contracts/examples/station-hourly.schema.v1.json `
-  --manifest contracts/examples/station-hourly.manifest.v1.json `
-  --data contracts/examples/station-hourly.rows.v1.json
-```
-
-初始化本地控制面 SQLite：
-
-```powershell
-python scripts/admin_cli.py init-control-schema --sqlite .local/control.sqlite
-```
-
-初始化本地 staging 表：
-
-```powershell
-python scripts/admin_cli.py init-staging-schema --sqlite .local/control.sqlite
-```
-
-推荐使用统一命令创建完整的本地开发库：
-
-```powershell
-python scripts/init_local_database.py --sqlite .local/ncs.sqlite
-python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
-```
-
-统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发；真实 MySQL 迁移和 ADS v2.5 的18数据集导入已经验收，连接凭据仍必须通过环境变量配置且不得进入 Git。
-
-数据库窗口连接该开发库时，在当前终端设置连接地址后启动：
-
-```powershell
-$env:NCS_DATABASE_URL = "sqlite:///.local/ncs.sqlite"
-python scripts/run_db_console.py
-```
-
-打开 `http://127.0.0.1:5002/db-console`。默认 `unmanaged` 模式只检查连接，不提供数据库进程启停。
-
-也可以用统一的本地入口启动任一服务；该入口会先幂等初始化开发库：
-
-```powershell
-python scripts/run_local.py admin
-python scripts/run_local.py query
-python scripts/run_local.py console
-```
-
-默认端口依次为 `5001`、`5000`、`5002`。三个服务需要分别占用一个终端。没有 ADS 业务视图时，查询服务会把相应能力标记为不可用；这属于预期降级，不会创建或猜测业务数据。
-
-控制面当前已提供批次生命周期、质量校验、发布和显式回滚用例的本地 DB-API 适配：批次按
-`CREATED -> LOADING -> VALIDATING -> READY -> PUBLISHED` 受状态机约束，重复提交同一
-上游批次（含 Manifest 校验和）、规则结果和 Schema 版本幂等；本地 JSON/CSV/TSV 交付先经过 Manifest、Schema、校验和质量检查，再创建导入批次，并可写入只保存原始 JSON 行的 staging 表。质量结果中的 `BLOCKER/ERROR` 会阻断进入 `READY`，发布和回滚会在事务中切换活动发布记录并写入审计日志。实现位于
-`src/ncs_backend/admin/importers.py`、`src/ncs_backend/admin/staging.py`、`src/ncs_backend/admin/repositories.py` 和 `src/ncs_backend/admin/services.py`；正式 JDBC/Sqoop 导入通道和具体质量规则编排将在后续迭代接入。
-
-管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记/列表、Schema 列表、批次创建/查询/筛选、质量完成与筛选查询、发布历史/详情、当前活动发布、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
-
-当前 ADS v2.5 使用兼容入口 `POST /internal/v1/ads-v23/imports`，接收服务器本地解压目录；命令行入口为 `scripts/import_ads_v23.py`。名称保留 `v23` 是为了兼容既有调用，实际 Schema `2.2.0` 对应最新 v2.5 的18数据集。历史 `POST /internal/v1/ads-v21/imports` 仅保留兼容，不作为新接入入口。迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
-
-MySQL 迁移、固定视图授权和三账号权限自检使用：
-
-```powershell
-python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
-```
-
-连接地址分别通过 `NCS_MYSQL_MIGRATOR_URL`、`NCS_MYSQL_PRIVILEGED_URL`、`NCS_MYSQL_ADMIN_URL`、`NCS_MYSQL_READER_URL` 提供。命令不会输出连接串；特权连接只在授予固定视图权限时需要。
-
-配置迁移、管理、查询三账号 URL 和 ADS 包目录后，可运行完整验收：
-
-```powershell
-python scripts/verify_mysql_e2e.py
-```
-
-该命令会执行幂等迁移、两次 ADS 导入、权限检查、必需视图合同、12 个查询请求和无残留事务回滚探针，仅用于测试/联调数据库。
-
-代码边界和后续阶段见：
-
-- `docs/代码实现规划.md`
-- `docs/实现路线与对接清单.md`
-- `docs/api-contract.md`
-- `docs/大屏接口冻结合同_v1.md`
-- `docs/前端接口协议.md`
-- `docs/前端启动元数据接口简表.md`
-- `docs/data-contract.md`
-- `docs/当前范围决策.md`
-- `docs/项目当前状态与下一步.md`
-- `docs/项目业务架构与代码规划.md`
-- `docs/ADS_Spark_v2.3交接包评审.md`
-- `docs/ADS_v2.5自动同步与模型推理设计.md`
+把 `mysql -h ...` 或 `systemctl` 输入到 `mysql>`：先执行 `exit` 回到 bash/PowerShell。`SELECT`、`CREATE USER`、`GRANT` 才是在 `mysql>` 中运行的 SQL。
