@@ -102,14 +102,14 @@ function Ensure-ProjectRuntime {
             Fail "./.venv must use Python 3.11 or 3.12. Recreate it with a supported Python version."
         }
 
-        & $ProjectPython -c "import flask, pymysql, ncs_backend" 2>$null
+        & $ProjectPython -c "import flask, pymysql, numpy, torch, ncs_backend" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[SETUP] Installing Flask, PyMySQL and backend dependencies"
-            & $ProjectPython -m pip install -e ".[mysql]"
+            Write-Host "[SETUP] Installing Flask, PyMySQL, NumPy, PyTorch and backend dependencies"
+            & $ProjectPython -m pip install -e ".[mysql,prediction]"
             if ($LASTEXITCODE -ne 0) { Fail "Failed to install backend dependencies." }
         }
 
-        & $ProjectPython -c "import flask, pymysql, ncs_backend" 2>$null
+        & $ProjectPython -c "import flask, pymysql, numpy, torch, ncs_backend" 2>$null
         if ($LASTEXITCODE -ne 0) { Fail "Backend dependencies are still unavailable after installation." }
         Write-Host "[READY] Backend runtime: ./.venv (Python $projectVersion)"
     }
@@ -126,6 +126,7 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Host "[SETUP] Missing ./.local/ncs.env; initializing recovery-mode MySQL automatically."
     $setupArguments = @{ SkipDependencyInstall = $true }
     if ($VmHost) { $setupArguments.VmHost = $VmHost }
+    if ($FrontendDir) { $setupArguments.FrontendDir = $FrontendDir }
     & (Join-Path $PSScriptRoot "setup_new_machine.ps1") @setupArguments
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ConfigPath)) {
         Fail "Automatic MySQL initialization did not create ./.local/ncs.env."
@@ -139,6 +140,21 @@ if (-not $FrontendDir) { Fail "Frontend package.json was not found. Pass -Fronte
 if ($env:NCS_FRONTEND_DIR -ne $FrontendDir) { Set-LocalConfigValue "NCS_FRONTEND_DIR" $FrontendDir }
 $queryPort = if ($env:NCS_QUERY_PORT) { [int]$env:NCS_QUERY_PORT } else { 5000 }
 $frontendPort = if ($env:NCS_FRONTEND_PORT) { [int]$env:NCS_FRONTEND_PORT } else { 5173 }
+
+Write-Host "[DATA] Checking published dashboard data"
+& $ProjectPython (Join-Path $RepoRoot "scripts\ensure_dashboard_data.py")
+if ($LASTEXITCODE -eq 3) {
+    Fail "No published ADS data. Put the latest ADS v2.5 directory or archive in ./data_exchange/packages and run start_project.cmd again."
+}
+if ($LASTEXITCODE -ne 0) { Fail "Dashboard data check or automatic import failed." }
+
+Write-Host "[MODEL] Checking published AI prediction"
+& $ProjectPython (Join-Path $RepoRoot "scripts\ensure_prediction_data.py")
+if ($LASTEXITCODE -eq 3) {
+    Write-Host "[WARN] No model package found. Put a model directory, ZIP or PTH in ./data_exchange/models to enable AI prediction." -ForegroundColor Yellow
+} elseif ($LASTEXITCODE -ne 0) {
+    Fail "AI model validation or prediction failed. ADS data remains published."
+}
 
 function ListeningPid([int]$Port) {
     $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1

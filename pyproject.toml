@@ -18,6 +18,10 @@ dev = [
 mysql = [
     "PyMySQL>=1.1,<2",
 ]
+prediction = [
+    "numpy>=1.26,<3",
+    "torch>=2.2,<3",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

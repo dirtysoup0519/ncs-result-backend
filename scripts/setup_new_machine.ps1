@@ -2,6 +2,7 @@ param(
     [string]$VmHost,
     [int]$MysqlPort = 3306,
     [string]$Database = "ncs_analytics",
+    [string]$FrontendDir,
     [switch]$SkipDependencyInstall
 )
 
@@ -52,6 +53,29 @@ function Resolve-VmHost([string]$RequestedHost) {
     return (Read-Host "VM MySQL host or IP (example: 192.168.x.x)").Trim()
 }
 
+function Resolve-FrontendDirectory([string]$RequestedPath) {
+    $candidates = @()
+    if ($RequestedPath) { $candidates += $RequestedPath }
+    if ($env:NCS_FRONTEND_DIR) { $candidates += $env:NCS_FRONTEND_DIR }
+    $candidates += @(
+        (Join-Path $RepoRoot "..\ncs-dashboard\ncs-dashboard"),
+        (Join-Path $RepoRoot "..\ncs-dashboard"),
+        (Join-Path $RepoRoot "ncs-dashboard\ncs-dashboard"),
+        (Join-Path $RepoRoot "ncs-dashboard")
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [IO.Path]::IsPathRooted($candidate)) { $candidate = Join-Path $RepoRoot $candidate }
+        $resolved = [IO.Path]::GetFullPath($candidate)
+        if (Test-Path (Join-Path $resolved "package.json")) { return $resolved }
+    }
+    $entered = (Read-Host "Frontend project directory containing package.json").Trim('"').Trim()
+    if (-not $entered) { return $null }
+    if (-not [IO.Path]::IsPathRooted($entered)) { $entered = Join-Path $RepoRoot $entered }
+    $resolved = [IO.Path]::GetFullPath($entered)
+    if (Test-Path (Join-Path $resolved "package.json")) { return $resolved }
+    return $null
+}
+
 try {
     $VmHost = Resolve-VmHost $VmHost
     if (-not $VmHost) { Fail "VM MySQL host/IP is required." }
@@ -72,11 +96,25 @@ try {
     }
     if (-not $SkipDependencyInstall) {
         Write-Host "[3/5] Installing Flask, PyMySQL and project dependencies"
-        & $Python -m pip install -e ".[mysql]"
+        & $Python -m pip install -e ".[mysql,prediction]"
         if ($LASTEXITCODE -ne 0) { Fail "Project dependency installation failed." }
     }
-    & $Python -c "import flask, pymysql, ncs_backend" 2>$null
-    if ($LASTEXITCODE -ne 0) { Fail "Flask, PyMySQL or the backend package is unavailable in ./.venv." }
+    & $Python -c "import flask, pymysql, numpy, torch, ncs_backend" 2>$null
+    if ($LASTEXITCODE -ne 0) { Fail "Flask, PyMySQL, NumPy, PyTorch or the backend package is unavailable in ./.venv." }
+
+    $FrontendDir = Resolve-FrontendDirectory $FrontendDir
+    if (-not $FrontendDir) { Fail "Frontend package.json was not found. Pass -FrontendDir or enter its directory." }
+    $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npmCommand) { Fail "Node.js/npm was not found. Install Node.js 23+ first." }
+    Write-Host "[3/5] Installing frontend dependencies in $FrontendDir"
+    Push-Location $FrontendDir
+    try {
+        & $npmCommand.Source install
+        if ($LASTEXITCODE -ne 0) { Fail "Frontend dependency installation failed." }
+    }
+    finally {
+        Pop-Location
+    }
 
     Write-Host "[4/5] Checking required MySQL recovery mode and creating database"
     & $Python (Join-Path $RepoRoot "scripts\bootstrap_mysql_recovery.py") --host $VmHost --port $MysqlPort --database $Database --check-only
@@ -96,6 +134,7 @@ try {
     New-Item -ItemType Directory -Path $LocalDir -Force | Out-Null
     $lines = @(
         "NCS_VM_HOST=$VmHost",
+        "NCS_FRONTEND_DIR=$FrontendDir",
         "NCS_DATABASE_URL=$databaseUrl",
         "NCS_MYSQL_SECURITY_MODE=recovery_root",
         "NCS_QUERY_HOST=127.0.0.1",

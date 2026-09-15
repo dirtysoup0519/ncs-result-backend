@@ -288,7 +288,42 @@ Test-Path .\scripts\setup_new_machine.ps1
 Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
 ```
 
-如果前端目录不同，调整为推荐目录；不要修改前端源码来适配本机路径。
+前端目录只要位于后端仓库的相邻目录，启动脚本会自动寻找。推荐使用以下任一结构：
+
+```text
+项目根目录/
+├── ncs-result-backend/
+└── ncs-dashboard/
+    └── ncs-dashboard/
+        └── package.json
+```
+
+或：
+
+```text
+项目根目录/
+├── ncs-result-backend/
+└── ncs-dashboard/
+    └── package.json
+```
+
+如果你的前端目录不在上述位置，不要修改前端源码，也不要把前端文件复制到后端仓库。进入后端仓库根目录后，直接通过 `-FrontendDir` 指定“包含 `package.json` 的前端项目目录”：
+
+```powershell
+.\start_project.cmd -FrontendDir "D:\你的项目根目录\前端项目目录"
+```
+
+例如前端实际位于 `D:\SHIJIAN\SPARK\dashboard\`，且该目录下有 `package.json`，应执行：
+
+```powershell
+.\start_project.cmd -FrontendDir "D:\SHIJIAN\SPARK\dashboard"
+```
+
+首次运行时脚本会自动执行 `npm install`，并将该路径保存到 Git 忽略的 `./.local/ncs.env`；以后直接运行 `.\start_project.cmd` 即可。如果只执行数据库初始化，也可以传入同一个参数：
+
+```powershell
+.\scripts\setup_new_machine.ps1 -VmHost <vm-ip> -FrontendDir "D:\SHIJIAN\SPARK\dashboard"
+```
 
 ### 3.7 一键初始化并启动
 
@@ -298,7 +333,7 @@ Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
 .\start_project.cmd
 ```
 
-启动脚本会自动创建 Python 虚拟环境并安装 Flask/PyMySQL。如果 `./.local/ncs.env` 不存在，它会自动调用数据库初始化脚本，然后继续启动后端和前端。无需输入任何 MySQL 密码。
+启动脚本会自动创建 Python 虚拟环境并安装 Flask/PyMySQL。如果 `./.local/ncs.env` 不存在，它会自动调用数据库初始化脚本。启动前还会检查 `dashboard_overview` 是否存在已发布批次：结果库为空时，自动导入 `./data_exchange/packages/` 中最后更新的 ADS 包；没有数据包时会停止启动并提示放入数据，避免前端在空库上显示“等待上游数据”。无需输入任何 MySQL 密码。
 
 也可以只执行数据库初始化：
 
@@ -335,9 +370,56 @@ Local config written to .../.local/ncs.env
   -SkipDependencyInstall
 ```
 
-### 3.8 导入 ADS 数据
+### 3.8 导入 ADS 数据和导出数据集
 
-初始化只创建数据库结构，不会自动生成业务数据。先将最新 ADS v2.5 包解压到后端仓库相邻目录，例如 `../ads-v25/`。
+初始化只创建数据库结构，不会自动生成业务数据。仓库根目录提供统一数据交换目录：
+
+```text
+data_exchange/
+├── packages/    # 放待导入的 ADS v2.5 目录、ZIP 或 TAR.GZ
+├── models/      # 放模型目录、ZIP 或 PTH 权重
+└── exports/     # 生成的数据集目录和 ZIP
+```
+
+把数据包放入 `./data_exchange/packages/` 后，在后端仓库根目录执行：
+
+```powershell
+.\import_data_package.cmd
+```
+
+未指定文件时，脚本自动选择 `packages/` 中最后更新的数据包。也可以明确指定目录或压缩包：
+
+```powershell
+.\import_data_package.cmd ".\data_exchange\packages\batch-001.zip"
+```
+
+脚本支持解压目录、`.zip`、`.tar.gz` 和 `.tgz`，会校验包路径、Manifest、Schema、哈希、行数和主键，然后将合格批次发布到 `.local/ncs.env` 指向的虚拟机 MySQL。原始数据包不会被修改或删除。
+
+导出数据库中全部机器学习数据集：
+
+```powershell
+.\export_dataset.cmd
+```
+
+默认导出到带时间戳的 `./data_exchange/exports/dataset-YYYYMMDD-HHMMSS/`，并生成同名 ZIP。也可以选择单个数据集或时间范围：
+
+```powershell
+.\export_dataset.cmd --dataset load_hourly
+.\export_dataset.cmd --dataset station_hour_daily --station-id 369001
+.\export_dataset.cmd --dataset all --start-date 2015-01-01 --end-date "2015-12-31 23:59:59"
+```
+
+需要指定输出目录或不生成 ZIP 时：
+
+```powershell
+.\export_dataset.cmd --output ".\data_exchange\exports\manual-export" --no-zip
+```
+
+上述两个脚本都使用当前仓库的 `./.venv/` 和 `./.local/ncs.env`，不写死虚拟机 IP、密码或本机绝对路径。首次使用前至少成功运行一次 `./start_project.cmd`。
+
+要显示 AI 预测，将模型同学交付的模型 ZIP、模型目录或 `.pth` 权重放入 `./data_exchange/models/`。`./start_project.cmd` 会自动安装 NumPy/PyTorch，并检查当前 `load_hourly` 批次是否已有预测；没有预测时会自动验证模型、登记版本、激活并发布未来 24 小时预测。模型缺失时普通统计大屏仍可启动，但 AI 区域会保持不可用。
+
+底层高级命令仍可直接调用：
 
 PowerShell（Windows，在后端仓库根目录）：
 
@@ -349,7 +431,7 @@ Get-Content .\.local\ncs.env | ForEach-Object {
 }
 
 .\.venv\Scripts\python.exe .\scripts\import_ads_v23.py `
-  --package ..\ads-v25 `
+  --package .\data_exchange\packages\ads-v25 `
   --database-url $env:NCS_DATABASE_URL `
   --skip-initialize
 ```
