@@ -2,6 +2,17 @@
 
 新机器建议优先直接执行第 3.7 节的一键初始化与启动；如果出现 Python、网络、MySQL 或依赖环境错误，再返回执行前面的环境检查步骤。
 
+## 快速启动速查
+
+日常启动只需两条命令（PowerShell，均在仓库根目录执行）：
+
+| 目标 | 命令 | 访问地址 |
+| --- | --- | --- |
+| 后端 + 前端大屏 | `.\start_project.cmd` | API `http://127.0.0.1:5000`；大屏 `http://localhost:5173` |
+| 数据库管理窗口 | `.\.venv\Scripts\python.exe .\scripts\run_db_console.py` | `http://127.0.0.1:5002/db-console` |
+
+> 注意：数据库窗口必须访问带 `/db-console` 路径的完整地址，根路径 `http://127.0.0.1:5002/` 没有页面，会返回 404。首次使用 `start_project.cmd` 需要输入虚拟机 IP（保存到 `.local\ncs.env`），之后无需重复输入。
+
 ## 1. 项目简介
 
 本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的完整交付包（当前上游包 v3.2、下游 `contract_v2` Schema 2.2.0），校验并发布 18 个数据集到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
@@ -502,7 +513,7 @@ Test-Path .\.local\ncs.env
 .\.venv\Scripts\python.exe .\scripts\run_db_console.py
 ```
 
-访问 `http://127.0.0.1:5002/db-console`。窗口只负责连接检查、日志和受控 SQL，不负责远程启动或停止虚拟机 MySQL。
+访问 `http://127.0.0.1:5002/db-console`（注意必须带 `/db-console` 路径，根路径没有页面会 404）。窗口只负责连接检查、日志和受控 SQL，不负责远程启动或停止虚拟机 MySQL。
 
 端口 `5000` 或 `5173` 已被占用时，启动脚本会保留已有进程。修改代码或配置后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动。
 
