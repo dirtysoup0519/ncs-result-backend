@@ -31,8 +31,16 @@ if ! flock -n 9; then exit 10; fi
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOGS/sync_ads.log"; }
 
-if ! "$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null; then
+# Python version warning is rate-limited to once per 24h so the watcher loop
+# does not flood sync_ads.log with the same message every round.
+PYWARN_FLAG="$LOGS/.python_version_warned"
+pywarn_stale() {
+  [[ ! -f "$PYWARN_FLAG" ]] && return 0
+  [[ -n "$(find "$PYWARN_FLAG" -mmin +1440 2>/dev/null)" ]]
+}
+if ! "$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null && pywarn_stale; then
   log "WARNING: $PYTHON_BIN is not Python 3.11/3.12; imports still run but final acceptance requires 3.11/3.12"
+  touch "$PYWARN_FLAG" 2>/dev/null || true
 fi
 
 # Select the oldest eligible batch. Files need a completion marker (.ready or
