@@ -533,7 +533,35 @@ PowerShell（Windows）：
 
 #### 零配置一键启动（推荐）
 
-假设虚拟机上只装好了 MySQL（root@127.0.0.1，恢复模式），克隆仓库后一条命令即可起监听：
+假设虚拟机上只装好了 MySQL（root@127.0.0.1，恢复模式）。第一步先把仓库副本送进虚拟机，第二步一条命令起监听。
+
+**第 1 步：把仓库副本送入虚拟机（二选一）**
+
+虚拟机能访问外网时直接 clone/pull：
+
+```bash
+cd ~
+git clone https://github.com/dirtysoup0519/ncs-result-backend.git   # 首次
+# 已有副本则进入目录后 git pull
+```
+
+虚拟机无外网时用 git bundle 经 VMware 共享文件夹传送。Windows 侧打包：
+
+```powershell
+cd D:\SHIJIAN\SPARK\ncs-result-backend
+git bundle create ..\ncs-main.bundle main
+```
+
+VM 侧导入（首次克隆或更新已有副本）：
+
+```bash
+cp /mnt/hgfs/<共享文件夹名>/ncs-main.bundle ~/ncs-main.bundle
+git clone ~/ncs-main.bundle -b main ~/ncs-result-backend          # 首次
+# 已有副本更新：
+cd ~/ncs-result-backend && git pull ~/ncs-main.bundle main
+```
+
+**第 2 步：克隆仓库后一条命令即可起监听：**
 
 ```bash
 cd ~/ncs-result-backend
