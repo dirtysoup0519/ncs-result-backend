@@ -1,125 +1,646 @@
 # NCS 结果库与后端
 
-当前统一业务、架构和代码规划见 `docs/项目业务架构与代码规划.md`。现有代码已完成 ADS v2.1 到 Windows MySQL 8.0.46 的历史联调；最新 ADS Spark v2.3 已核验但尚未适配，当前虚拟机 MySQL 5.7.35 也尚未完成项目建库和权限验收。
+新机器建议优先直接执行第 3.7 节的一键初始化与启动；如果出现 Python、网络、MySQL 或依赖环境错误，再返回执行前面的环境检查步骤。
 
-查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。9 个当前必需视图已通过真实 MySQL 验证；预测视图属于可选上游能力，不作为当前健康检查的阻断项。
+## 快速启动速查
 
-当前范围只包含处理后数据的结果库、数据管理后端和大屏查询后端。机器学习训练、推理、模型管理及特征处理不在当前范围；上游若提供预测结果，本项目按普通处理后数据集导入和发布。范围决策见 `docs/当前范围决策.md`，历史 ML 原型仅保存在 `archive/ml-control-plane-prototype`。
+日常启动只需两条命令（PowerShell，均在仓库根目录执行）：
 
-最终实训环境采用 Python 3.11 或 3.12；上游使用 Hadoop 3.x 与 Spark SQL/PySpark 产生 ADS，MySQL 运行在虚拟机内。数据管理程序支持 Windows 远程导入和虚拟机就地处理两种部署模式，Windows Flask 通过虚拟机 IP 查询。设计见 `docs/双运行位置数据接入设计.md`。前端单独使用 Node.js 23+、Vue 3 和 DataV。
+| 目标 | 命令 | 访问地址 |
+| --- | --- | --- |
+| 后端 + 前端大屏 | `.\start_project.cmd` | API `http://127.0.0.1:5000`；大屏 `http://localhost:5173` |
+| 数据库管理窗口 | `.\.venv\Scripts\python.exe .\scripts\run_db_console.py` | `http://127.0.0.1:5002/db-console` |
 
-向前端交接项目时不要直接压缩工作目录。数据库密码放在被忽略的 `.local/ncs.env`，前端只使用查询 API 和可选开发 API Key；快速说明见 `docs/前端联调交接说明.md`，从下载仓库开始的完整步骤见 `docs/仓库下载与联调操作手册.md`。
+> 注意：数据库窗口必须访问带 `/db-console` 路径的完整地址，根路径 `http://127.0.0.1:5002/` 没有页面，会返回 404。首次使用 `start_project.cmd` 需要输入虚拟机 IP（保存到 `.local\ncs.env`），之后无需重复输入。
 
-前端 `ncs-dashboard.zip` 只作为只读联调依据，不纳入或修改其源码。实际请求与联调门禁见 `docs/前端代码包只读评审.md`。
+## 1. 项目简介
 
-## 本地验证
+本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的完整交付包（当前上游包 v3.2、下游 `contract_v2` Schema 2.2.0），校验并发布 18 个数据集到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
 
-```powershell
-python -m pytest
+本仓库负责：
+
+- ADS 交接包校验、幂等导入、质量检查、发布和回滚；
+- MySQL 结果表、控制表和稳定的 `api_v1_*` 查询视图；
+- 面向前端的 Flask 查询 API；
+- 数据库简易管理窗口；
+- 使用已经训练好的模型和权重完成推理及预测发布；
+- Windows 手工导入与虚拟机 Shell 自动同步两个入口。
+
+本仓库不负责：
+
+- ODS、DWD、DWS、ADS 的生产计算；
+- 模型训练、调参和评估；
+- 修改前端源码；
+- Hadoop、Hive 和 Spark 集群运维。
+
+文档入口：新接手人员先阅读本 README，再按 `docs/文档现行基线.md` 的顺序阅读当前架构、状态、数据合同和联调说明。`docs/` 中带有“历史留档/不可执行”标记的文件只用于追溯，不要照抄其中的旧版本、三账号或数据库授权命令。
+
+当前技术基线：
+
+| 组件 | 要求 |
+| --- | --- |
+| Hadoop | 3.x，由上游负责 |
+| ADS | 上游完整包 v3.2；下游合同 Schema 2.2.0，18 个数据集 |
+| MySQL | 5.7.35，实训恢复模式 |
+| Python | 3.11 或 3.12 |
+| 后端 | Flask + PyMySQL |
+| 前端 | Vue 3 + DataV，Node.js 23+ |
+
+当前答辩环境固定使用 `skip-grant-tables` 恢复模式和单一 root 连接，不创建项目数据库账号，也不执行数据库权限隔离检查。`api_v1_*` 视图继续用于隔离物理表结构和稳定前端合同。该模式没有数据库身份认证能力，只允许在隔离的 VMware 实训网络中使用。
+
+## 2. 项目架构
+
+```text
+上游 Spark/Hive ADS
+  -> v3.2 包内 contract_v2（18 个 CSV）ZIP/TAR.GZ + 完成标记
+  -> 数据入口
+       ├─ Windows 手工导入
+       └─ 虚拟机 Shell 自动同步
+  -> 统一 Python 校验、幂等、事务和发布逻辑
+  -> 虚拟机 MySQL / ncs_analytics
+       ├─ ctl_*      控制、批次、质量和发布记录
+       ├─ stg_*      导入暂存
+       ├─ rpt_*      结果数据
+       └─ api_v1_*   面向查询后端的稳定视图
+  -> Windows Flask API :5000
+  -> Vue 3/DataV 大屏 :5173
+
+外部模型包 + 已发布 load_hourly
+  -> 后端模型适配与推理
+  -> 预测结果表和 api_v1_load_prediction
+  -> 大屏 AI 预测组件
 ```
 
-启动查询服务：
+两个数据入口只负责发现和提交数据，不允许各写一套业务逻辑。相同 `sourceBatchId + packageChecksum` 重复提交时只能产生一次有效发布。新批次失败时继续保留旧的已发布批次；预测失败不回滚已经成功发布的 ADS 数据。
 
-```powershell
-python scripts/run_query.py
+当前代码的真实调用架构如下：
+
+```text
+Windows 启动入口
+├─ start_project.cmd
+│  └─ scripts/start_project.ps1
+│     ├─ 创建或复用 .venv（Python 3.11/3.12）
+│     ├─ 读取 .local/ncs.env
+│     ├─ 启动 scripts/run_query.py
+│     └─ 启动 Vue npm run dev
+└─ scripts/setup_new_machine.ps1（首次初始化）
+   ├─ bootstrap_mysql_recovery.py       检查 VM MySQL 恢复模式并建库
+   ├─ setup_mysql_ads.py                执行迁移和视图初始化
+   └─ verify_mysql_ads.py               验证 MySQL 结构合同
+
+数据导入链路
+├─ Windows：scripts/import_ads_v23.py
+└─ 虚拟机：scripts/shell/sync_ads_once.sh
+   └─ ncs_backend.admin.adapters.ads_v23_import
+      ├─ Manifest/文件哈希/Schema/主键校验
+      ├─ stg_* 暂存与 ctl_* 批次记录
+      ├─ rpt_* 结果表导入
+      └─ 发布 api_v1_* 视图可见批次
+
+查询链路
+scripts/run_query.py
+└─ ncs_backend.bootstrap
+   └─ ncs_backend.query.app（Flask）
+      ├─ DashboardQueryService
+      ├─ DashboardQueryRepository（只读 api_v1_*）
+      └─ 前端 /api/v1/* DTO
+
+预测链路（可选）
+run_load_prediction.py
+└─ 模型适配器读取外部模型包和已发布数据
+   └─ 预测结果表 / api_v1_load_prediction
 ```
 
-Windows 联调环境也可以双击仓库根目录的 `start_project.cmd`，一次启动查询后端和位于相邻目录 `../ncs-dashboard/ncs-dashboard` 的 Vue 前端，并自动打开 `http://localhost:5173/`。该脚本按当前学生实训环境固定连接虚拟机 MySQL；如果目录或虚拟机地址变化，需要先修改脚本顶部配置。
+数据库当前固定在虚拟机 MySQL 5.7.35；Windows 后端通过虚拟机 IP 访问，虚拟机 Shell 通过 `127.0.0.1` 访问。两者统一使用恢复模式下的无密码 root 连接，项目不创建三个应用账号，也不把 MySQL 密码放入仓库。
 
-启动内部管理服务：
+推荐目录结构如下，仓库内命令均从 `ncs-result-backend` 根目录执行：
 
-```powershell
-python scripts/run_admin.py
+```text
+workspace/
+├── ncs-result-backend/
+├── ncs-dashboard/
+│   └── ncs-dashboard/
+├── ncs-runtime/          # 虚拟机运行环境和私密配置，不进入 Git
+└── ncs-ads-exchange/     # 虚拟机 ADS 交换目录，不进入 Git
 ```
 
-数据库未配置时，`/health/live` 应返回存活，`/health/ready` 会明确返回未就绪；这不是数据库连接验证。
+运行位置：
 
-当前合同样例位于 `contracts/examples/`。这些样例用于验证内部协议，不代表上游真实字段已经确认。
+| 部分 | 位置 | 数据库地址 |
+| --- | --- | --- |
+| MySQL | 虚拟机 | 本机服务 |
+| Flask 查询 API | Windows | 虚拟机 IP |
+| Windows 手工导入 | Windows | 虚拟机 IP |
+| Shell 自动同步 | 虚拟机 | `127.0.0.1` |
+| Vue 大屏 | Windows | `http://127.0.0.1:5173` |
 
-校验一份 Schema、Manifest 和 JSON 样例：
+## 3. 安装与启动
 
-```powershell
-python scripts/admin_cli.py validate-delivery `
-  --schema contracts/examples/station-hourly.schema.v1.json `
-  --manifest contracts/examples/station-hourly.manifest.v1.json `
-  --data contracts/examples/station-hourly.rows.v1.json
+### 3.1 虚拟机最低条件
+
+假设虚拟机初始状态只有 `hadoop` 用户和 Hadoop 3.x。先确认 `hadoop` 具有 sudo 权限，并记录虚拟机 IP 和 Windows VMware 网卡 IP。
+
+bash（虚拟机）：
+
+```bash
+whoami
+hostname -I
+sudo -v
+timedatectl
+sudo timedatectl set-timezone Asia/Shanghai
 ```
 
-初始化本地控制面 SQLite：
+PowerShell（Windows）：
 
 ```powershell
-python scripts/admin_cli.py init-control-schema --sqlite .local/control.sqlite
+Get-NetIPAddress -AddressFamily IPv4
+Test-Connection <VM-IP> -Count 2
 ```
 
-初始化本地 staging 表：
+后续示例使用：
+
+```text
+虚拟机：<vm-ip>（以当前机器的 VMware 网段为准）
+Windows VMware 网卡：192.168.176.1
+MySQL：3306
+```
+
+实际地址不同时必须替换，不能直接照抄。
+
+### 3.2 安装虚拟机基础工具
+
+bash（虚拟机）：
+
+```bash
+sudo yum install -y git curl wget unzip tar util-linux cronie
+sudo systemctl enable --now crond
+git --version
+flock --version
+crontab -l
+```
+
+`util-linux` 提供 `flock`，`cronie` 提供 `cron/crontab`。只使用 Windows 手工导入时可以暂不配置 cron，但 MySQL 必须安装。
+
+### 3.3 安装和配置 MySQL
+
+为保持实训环境一致，优先使用与原虚拟机相同的 MySQL 5.7 RPM 包。将安装包放在当前用户目录下的 `./mysql57-rpms/`，然后执行：
+
+```bash
+cd ./mysql57-rpms
+sudo yum localinstall -y ./*.rpm
+```
+
+如果已经配置可用的 MySQL 5.7 Community 仓库，可以执行：
+
+```bash
+sudo yum install -y mysql-community-server
+```
+
+不要同时混装 MariaDB 和 MySQL Community Server。确认安装结果：
+
+```bash
+rpm -qa | grep -Ei 'mysql|mariadb'
+which mysqld
+mysqld --version
+```
+
+使用下面的命令查找系统实际读取的 MySQL 配置文件：
+
+```bash
+mysqld --verbose --help 2>/dev/null | sed -n '/Default options are read from/,+1p'
+```
+
+在该系统配置文件的 `[mysqld]` 段设置：
+
+```ini
+[mysqld]
+port=3306
+bind-address=0.0.0.0
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+default-time-zone='+08:00'
+```
+
+配置中必须存在：
+
+```ini
+skip-grant-tables
+```
+
+为了允许 Windows 查询后端访问，配置中不得存在 `skip-networking`。
+
+检查有效启动参数：
+
+```bash
+my_print_defaults mysqld | grep -Ei 'skip-grant|skip-networking|bind-address|port'
+sudo systemctl enable mysqld
+sudo systemctl restart mysqld
+sudo systemctl status mysqld --no-pager
+sudo ss -lntp | grep ':3306'
+```
+
+如果修改过 systemd 服务覆盖配置，重启前先运行：
+
+```bash
+sudo systemctl daemon-reload
+```
+
+### 3.4 启用并验证恢复模式
+
+重启 MySQL 后直接无密码登录：
+
+```bash
+mysql -uroot
+```
+
+在 `mysql>` 中执行：
+
+```sql
+SHOW VARIABLES LIKE 'skip_grant_tables';
+```
+
+结果必须为 `ON`。不要执行 `ALTER USER`、`CREATE USER`、`GRANT` 或 `FLUSH PRIVILEGES`；项目不依赖 MySQL 账号权限，数据库、表和视图由无密码 root 连接创建。
+
+### 3.5 配置虚拟机防火墙
+
+只向 Windows VMware 网卡放行 3306，不要向公共网络开放。
+
+bash（虚拟机）：
+
+```bash
+sudo systemctl is-active firewalld
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.176.1/32" port protocol="tcp" port="3306" accept'
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-rich-rules
+```
+
+如果 `firewalld` 未运行，应先确认虚拟机网络隔离方式，不要盲目修改防火墙服务。Windows 验证：
 
 ```powershell
-python scripts/admin_cli.py init-staging-schema --sqlite .local/control.sqlite
+Test-NetConnection <vm-ip> -Port 3306
 ```
 
-推荐使用统一命令创建完整的本地开发库：
+只有 `TcpTestSucceeded : True` 才继续。
+
+### 3.6 准备 Windows 开发环境
+
+Windows 必须安装：
+
+- Python 3.11 或 3.12；
+- Git；
+- Node.js 23+，仅启动前端时需要。
+
+不需要手工安装 Flask 或 PyMySQL。`./setup_new_machine.cmd` 和 `./start_project.cmd` 会自动创建 `./.venv/` 并安装后端依赖。不要使用全局 `python ./scripts/run_query.py` 启动项目。
+
+将后端和前端放到“项目架构”所示的相邻目录。进入后端仓库根目录后检查：
 
 ```powershell
-python scripts/init_local_database.py --sqlite .local/ncs.sqlite
-python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
+python --version
+git branch --show-current
+Test-Path .\scripts\setup_new_machine.ps1
+Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
 ```
 
-统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发；真实 MySQL 迁移和 ADS v2.1 导入已经验收，连接凭据仍必须通过环境变量配置且不得进入 Git。
+前端目录只要位于后端仓库的相邻目录，启动脚本会自动寻找。推荐使用以下任一结构：
 
-数据库窗口连接该开发库时，在当前终端设置连接地址后启动：
+```text
+项目根目录/
+├── ncs-result-backend/
+└── ncs-dashboard/
+    └── ncs-dashboard/
+        └── package.json
+```
+
+或：
+
+```text
+项目根目录/
+├── ncs-result-backend/
+└── ncs-dashboard/
+    └── package.json
+```
+
+如果你的前端目录不在上述位置，不要修改前端源码，也不要把前端文件复制到后端仓库。进入后端仓库根目录后，直接通过 `-FrontendDir` 指定“包含 `package.json` 的前端项目目录”：
 
 ```powershell
-$env:NCS_DATABASE_URL = "sqlite:///.local/ncs.sqlite"
-python scripts/run_db_console.py
+.\start_project.cmd -FrontendDir "D:\你的项目根目录\前端项目目录"
 ```
 
-打开 `http://127.0.0.1:5002/db-console`。默认 `unmanaged` 模式只检查连接，不提供数据库进程启停。
-
-也可以用统一的本地入口启动任一服务；该入口会先幂等初始化开发库：
+例如前端实际位于 `D:\SHIJIAN\SPARK\dashboard\`，且该目录下有 `package.json`，应执行：
 
 ```powershell
-python scripts/run_local.py admin
-python scripts/run_local.py query
-python scripts/run_local.py console
+.\start_project.cmd -FrontendDir "D:\SHIJIAN\SPARK\dashboard"
 ```
 
-默认端口依次为 `5001`、`5000`、`5002`。三个服务需要分别占用一个终端。没有 ADS 业务视图时，查询服务会把相应能力标记为不可用；这属于预期降级，不会创建或猜测业务数据。
-
-控制面当前已提供批次生命周期、质量校验、发布和显式回滚用例的本地 DB-API 适配：批次按
-`CREATED -> LOADING -> VALIDATING -> READY -> PUBLISHED` 受状态机约束，重复提交同一
-上游批次（含 Manifest 校验和）、规则结果和 Schema 版本幂等；本地 JSON/CSV/TSV 交付先经过 Manifest、Schema、校验和质量检查，再创建导入批次，并可写入只保存原始 JSON 行的 staging 表。质量结果中的 `BLOCKER/ERROR` 会阻断进入 `READY`，发布和回滚会在事务中切换活动发布记录并写入审计日志。实现位于
-`src/ncs_backend/admin/importers.py`、`src/ncs_backend/admin/staging.py`、`src/ncs_backend/admin/repositories.py` 和 `src/ncs_backend/admin/services.py`；正式 JDBC/Sqoop 导入通道和具体质量规则编排将在后续迭代接入。
-
-管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记/列表、Schema 列表、批次创建/查询/筛选、质量完成与筛选查询、发布历史/详情、当前活动发布、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
-
-ADS v2.1 已提供同步管理入口 `POST /internal/v1/ads-v21/imports`。它接收服务器本地解压目录并选择 `A0`/`B` 波次；迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
-
-MySQL 迁移、固定视图授权和三账号权限自检使用：
+首次运行时脚本会自动执行 `npm install`，并将该路径保存到 Git 忽略的 `./.local/ncs.env`；以后直接运行 `.\start_project.cmd` 即可。如果只执行数据库初始化，也可以传入同一个参数：
 
 ```powershell
-python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
+.\scripts\setup_new_machine.ps1 -VmHost <vm-ip> -FrontendDir "D:\SHIJIAN\SPARK\dashboard"
 ```
 
-连接地址分别通过 `NCS_MYSQL_MIGRATOR_URL`、`NCS_MYSQL_PRIVILEGED_URL`、`NCS_MYSQL_ADMIN_URL`、`NCS_MYSQL_READER_URL` 提供。命令不会输出连接串；特权连接只在授予固定视图权限时需要。
+### 3.7 一键初始化并启动
 
-配置迁移、管理、查询三账号 URL 和 ADS 包目录后，可运行完整验收：
+在后端仓库根目录直接运行：
 
 ```powershell
-python scripts/verify_mysql_e2e.py
+.\start_project.cmd
 ```
 
-该命令会执行幂等迁移、两次 ADS 导入、权限检查、必需视图合同、12 个查询请求和无残留事务回滚探针，仅用于测试/联调数据库。
+启动脚本会自动创建 Python 虚拟环境并安装 Flask/PyMySQL。如果 `./.local/ncs.env` 不存在，它会自动调用数据库初始化脚本。启动前还会检查 `dashboard_overview` 是否存在已发布批次：结果库为空时，自动导入 `./data_exchange/packages/` 中最后更新的 ADS 包；没有数据包时会停止启动并提示放入数据，避免前端在空库上显示“等待上游数据”。无需输入任何 MySQL 密码。
 
-代码边界和后续阶段见：
+也可以只执行数据库初始化：
 
-- `docs/代码实现规划.md`
-- `docs/实现路线与对接清单.md`
-- `docs/api-contract.md`
-- `docs/大屏接口冻结合同_v1.md`
-- `docs/前端接口协议.md`
-- `docs/前端启动元数据接口简表.md`
-- `docs/data-contract.md`
-- `docs/当前范围决策.md`
-- `docs/项目当前状态与下一步.md`
-- `docs/项目业务架构与代码规划.md`
-- `docs/ADS_Spark_v2.3交接包评审.md`
+```powershell
+.\scripts\setup_new_machine.ps1 `
+  -VmHost <vm-ip> `
+  -MysqlPort 3306
+```
+
+脚本依次完成：
+
+1. 检查虚拟机 MySQL 端口；
+2. 检查 Python 3.11/3.12；
+3. 创建 `./.venv/` 并安装项目依赖；
+4. 使用无密码 root 连接；
+5. 确认 MySQL 正运行在 `skip-grant-tables`；
+6. 创建 `ncs_analytics`、控制表、结果表、索引和视图；
+7. 验证稳定视图合同；
+8. 生成 Git 忽略的 `./.local/ncs.env`。
+
+成功标志：
+
+```text
+READY: recovery-mode MySQL schema and views are ready.
+Local config written to .../.local/ncs.env
+```
+
+脚本可重复执行。依赖已经安装时可以跳过重复安装：
+
+```powershell
+.\scripts\setup_new_machine.ps1 `
+  -VmHost <vm-ip> `
+  -MysqlPort 3306 `
+  -SkipDependencyInstall
+```
+
+### 3.8 导入 ADS 数据和导出数据集
+
+初始化只创建数据库结构，不会自动生成业务数据。仓库根目录提供统一数据交换目录：
+
+```text
+data_exchange/
+├── packages/    # 放待导入的 ADS v2.5 目录、ZIP 或 TAR.GZ
+├── models/      # 放模型目录、ZIP 或 PTH 权重
+└── exports/     # 生成的数据集目录和 ZIP
+```
+
+把数据包放入 `./data_exchange/packages/` 后，在后端仓库根目录执行：
+
+```powershell
+.\import_data_package.cmd
+```
+
+未指定文件时，脚本自动选择 `packages/` 中最后更新的数据包。也可以明确指定目录或压缩包：
+
+```powershell
+.\import_data_package.cmd ".\data_exchange\packages\batch-001.zip"
+```
+
+脚本支持解压目录、`.zip`、`.tar.gz` 和 `.tgz`，会校验包路径、Manifest、Schema、哈希、行数和主键，然后将合格批次发布到 `.local/ncs.env` 指向的虚拟机 MySQL。原始数据包不会被修改或删除。
+
+#### 更新已有业务数据
+
+更新数据不需要重新建库，也不要直接修改 `rpt_*` 表。每个新批次使用新的文件名和 `sourceBatchId`，保留旧包以便审计和回滚。
+
+Windows 手工更新：
+
+```powershell
+# 1. 把最新上游包中的 contract_v2 数据包复制到 data_exchange/packages/
+# 2. 明确指定新包，避免误选旧包
+.\import_data_package.cmd ".\data_exchange\packages\ads-v25-20260915.zip"
+```
+
+导入器会在事务中完成校验、暂存、发布和旧批次切换；失败时旧的 `PUBLISHED` 批次保持不变。导入成功后刷新：
+
+```text
+GET /api/v1/meta/data-status
+GET /api/v1/dashboard/overview
+```
+
+虚拟机 Shell 自动更新：
+
+```bash
+# 在虚拟机完成复制后再生成 .ready 标记
+cp batch-002.zip "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.part"
+mv "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.part" \
+   "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip"
+touch "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.ready"
+
+# 立即处理一次；持续监听则运行 watch_ads.sh
+./scripts/shell/sync_ads_once.sh
+```
+
+不要在文件仍在传输时创建 `.ready`，不要同时运行多个同步进程。Shell 和 Windows 导入使用同一套校验、幂等和发布逻辑。
+
+新 ADS 批次导入后，如果需要刷新 AI 预测，确认模型仍在 `./data_exchange/models/`，然后执行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\ensure_prediction_data.py
+```
+
+该命令会根据最新已发布的 `load_hourly` 批次重新生成预测；若该批次已有 `PUBLISHED` 预测，则自动跳过。只更新模型、不更新 ADS 数据时，也执行同一命令即可。
+
+导出数据库中全部机器学习数据集：
+
+```powershell
+.\export_dataset.cmd
+```
+
+默认导出到带时间戳的 `./data_exchange/exports/dataset-YYYYMMDD-HHMMSS/`，并生成同名 ZIP。也可以选择单个数据集或时间范围：
+
+```powershell
+.\export_dataset.cmd --dataset load_hourly
+.\export_dataset.cmd --dataset station_hour_daily --station-id 369001
+.\export_dataset.cmd --dataset all --start-date 2015-01-01 --end-date "2015-12-31 23:59:59"
+```
+
+需要指定输出目录或不生成 ZIP 时：
+
+```powershell
+.\export_dataset.cmd --output ".\data_exchange\exports\manual-export" --no-zip
+```
+
+上述两个脚本都使用当前仓库的 `./.venv/` 和 `./.local/ncs.env`，不写死虚拟机 IP、密码或本机绝对路径。首次使用前至少成功运行一次 `./start_project.cmd`。
+
+要显示 AI 预测，将模型同学交付的模型 ZIP、模型目录或 `.pth` 权重放入 `./data_exchange/models/`。`./start_project.cmd` 会自动安装 NumPy/PyTorch，并检查当前 `load_hourly` 批次是否已有预测；没有预测时会自动验证模型、登记版本、激活并发布未来 24 小时预测。模型缺失时普通统计大屏仍可启动，但 AI 区域会保持不可用。
+
+底层高级命令仍可直接调用：
+
+PowerShell（Windows，在后端仓库根目录）：
+
+```powershell
+Get-Content .\.local\ncs.env | ForEach-Object {
+  if ($_ -match '^([^#=]+)=(.*)$') {
+    Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+  }
+}
+
+.\.venv\Scripts\python.exe .\scripts\import_ads_v23.py `
+  --package .\data_exchange\packages\ads-v25 `
+  --database-url $env:NCS_DATABASE_URL `
+  --skip-initialize
+```
+
+脚本名称保留 `v23` 是为了兼容旧调用，当前实现会根据 Manifest 识别并导入 Schema 2.2.0 的 18 个数据集；当前上游完整包版本为 v3.2。
+
+### 3.9 启动后端和前端
+
+PowerShell（Windows，在后端仓库根目录）：
+
+```powershell
+Test-Path .\.local\ncs.env
+.\start_project.cmd
+```
+
+启动脚本会先检查 `./.venv/`：不存在时自动使用 Python 3.11/3.12 创建，缺少 Flask、PyMySQL 或项目包时自动安装。首次运行会要求输入当前虚拟机 IP，并将数据库地址保存到 Git 忽略的 `./.local/ncs.env`。前端不在常见相邻目录时会要求输入其目录并保存，后续启动无需重复输入。
+
+- 查询 API：`http://127.0.0.1:5000`；
+- Vue 大屏：`http://localhost:5173`。
+
+数据库简易管理窗口按需单独启动：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_db_console.py
+```
+
+访问 `http://127.0.0.1:5002/db-console`（注意必须带 `/db-console` 路径，根路径没有页面会 404）。窗口只负责连接检查、日志和受控 SQL，不负责远程启动或停止虚拟机 MySQL。
+
+端口 `5000` 或 `5173` 已被占用时，启动脚本会保留已有进程。修改代码或配置后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动。
+
+### 3.10 运行测试
+
+PowerShell（Windows）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+需要连接真实 MySQL 的环境测试必须使用虚拟机 MySQL；默认测试中的少量跳过项表示未提供真实 MySQL、ADS 包或预测依赖，不代表单元测试失败。
+
+### 3.11 可选：部署虚拟机 Shell 自动同步
+
+仅使用 Windows 手工导入时可以跳过本节。自动同步要求虚拟机额外具备 Python 3.11/3.12。不要替换 CentOS 自带 Python，否则可能破坏 `yum`；应使用独立 Python 或 Conda 环境。
+
+同步脚本的可靠性约定（2026-09 起）：
+
+- **选包不阻塞**：只挑选带完成标记（`*.zip.ready` / `*.zip.ready.predict` 或目录内 `_SUCCESS`）的最旧批次；上游未写完的包会被自动跳过，不会阻塞后续已完成批次。
+- **导入重试**：导入命令按异常类型返回退出码（30=数据问题、40=MySQL 暂不可用、50=内部错误）。30 立即进入 `rejected`；40/50 由 `NCS_ADS_SYNC_MAX_ATTEMPTS`（默认 3）控制重试次数，`.attempts` 计数文件与包同目录，超过上限才进入 `rejected`。
+- **预测重试**：预测失败不回滚已发布的 ADS；包留在 `ready/`，完成标记改名为 `.ready.predict`，下一轮只重跑预测。重试到上限后包进入 `archive/`（数据已发布），日志标记 `predictionFailed`。
+- **_SUCCESS 目录模式**：上游也可交付 `ready/<batchId>/` 目录（内含 `_SUCCESS` 文件），脚本与 ZIP 包同等处理。
+- **Python 版本预检**：脚本用 `NCS_PYTHON_BIN`（默认 `python3`）指定的解释器执行导入；版本低于 3.11 时在日志输出 WARNING，不中断同步。
+- **日志时区**：脚本内 `date -Is` 固定使用 `NCS_LOG_TZ`（默认 `Asia/Shanghai`），与虚拟机系统时区无关。
+
+虚拟机环境前置检查（一次性，root 执行）：
+
+```bash
+# 时区必须为 Asia/Shanghai（历史上曾误配为 Asia/Seoul）
+timedatectl set-timezone Asia/Shanghai
+timedatectl | grep 'Time zone'
+
+# NTP 同步（CentOS 7 用 chrony）
+yum install -y chrony && systemctl enable --now chronyd
+chronyc tracking | grep -E 'System time|Leap'
+```
+
+Linux 下克隆仓库后脚本执行位已内嵌在 Git 中，无需再 `chmod +x`；仅 Windows 克隆后复制到虚拟机时需要。
+
+将后端仓库放在当前用户目录的 `./ncs-result-backend/`，进入仓库后创建相邻运行目录：
+
+```bash
+cd ./ncs-result-backend
+python3.11 -m venv ../ncs-runtime/venv
+../ncs-runtime/venv/bin/pip install -e '.[mysql]'
+mkdir -p ../ncs-ads-exchange/{ready,processing,archive,rejected,logs,locks}
+cp ./scripts/shell/ncs_ads_sync.env.example ../ncs-runtime/ads-sync.env
+chmod 600 ../ncs-runtime/ads-sync.env
+chmod +x ./scripts/shell/*.sh
+```
+
+如果系统没有 `python3.11`，先通过独立 Conda 环境或离线 Python 3.11/3.12 安装包提供该命令，再继续。不要用 Python 3.10 作为最终验收环境。
+
+编辑 `../ncs-runtime/ads-sync.env`：
+
+```bash
+export NCS_REPO=.
+export NCS_DATABASE_URL='mysql+pymysql://root@127.0.0.1:3306/ncs_analytics'
+export NCS_ADS_EXCHANGE_ROOT=../ncs-ads-exchange
+export NCS_ADS_SYNC_INTERVAL_SECONDS=30
+export PATH=../ncs-runtime/venv/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+暂不需要预测时不要设置 `NCS_MODEL_PACKAGE`。
+
+先手工执行一次：
+
+```bash
+source ../ncs-runtime/ads-sync.env
+./scripts/shell/sync_ads_once.sh
+echo $?
+```
+
+没有新包时退出码应为 `0`。投递真实包时，必须先完整复制数据包，再创建同名完成标记：
+
+```bash
+cp ../incoming/package.zip ../ncs-ads-exchange/ready/package.zip
+touch ../ncs-ads-exchange/ready/package.zip.ready
+./scripts/shell/sync_ads_once.sh
+tail -n 100 ../ncs-ads-exchange/logs/sync_ads.log
+```
+
+成功后数据包和标记进入 `../ncs-ads-exchange/archive/`；失败时进入 `../ncs-ads-exchange/rejected/`，详细错误写入 `../ncs-ads-exchange/logs/`。
+
+前台验证轮询（推荐用一键脚本，等价于手工 source + watch_ads.sh）：
+
+```bash
+./scripts/shell/start_ads_sync.sh                     # 前台监听，Ctrl+C 停止
+./scripts/shell/start_ads_sync.sh --once              # 只跑一轮并打印退出码
+./scripts/shell/start_ads_sync.sh --detach            # 后台常驻（nohup + pid 文件）
+./scripts/shell/start_ads_sync.sh --stop              # 停止后台监听
+./scripts/shell/start_ads_sync.sh --env /path/ads-sync.env  # 指定环境文件
+```
+
+默认读取 `<仓库>/../ncs-runtime/ads-sync.env`，也可用 `NCS_ADS_SYNC_ENV` 环境变量指定。后台模式的 pid 文件在 `<交换目录>/locks/watch_ads.pid`，日志在 `<交换目录>/logs/watch_ads.log`；重复 `--detach` 会被拒绝，防止双实例。
+
+确认前台运行正常后按 `Ctrl+C` 停止，再切换到后台常驻：
+
+```bash
+./scripts/shell/start_ads_sync.sh --detach
+```
+
+如需开机自启，在 `hadoop` 用户的 `crontab -e` 中加入：
+
+```cron
+@reboot cd ~/ncs-result-backend && ./scripts/shell/start_ads_sync.sh --detach
+```
+
+检查：
+
+```bash
+ps -ef | grep '[w]atch_ads.sh'
+crontab -l
+tail -f ../ncs-ads-exchange/logs/sync_ads.log
+```
+
+不要同时运行多个 watcher，也不要同时配置每分钟 cron；脚本内部已经每 30 秒轮询并使用 `flock` 防止并发。
+
+### 3.12 常见错误
+
+`MYSQL_RECOVERY_MODE_REQUIRED`：MySQL 没有按当前实训方案运行。确认有效配置包含 `skip-grant-tables`、不包含 `skip-networking`，重启后验证 `skip_grant_tables=ON`。
+
+`Missing ./.local/ncs.env`：直接重新运行 `./start_project.cmd`，启动脚本会自动调用初始化；仍失败时查看初始化窗口中最早出现的错误。
+
+`Access denied for user`：当前连接串仍带旧账号或密码，或者 MySQL 没有真正进入恢复模式。重新执行 `./setup_new_machine.cmd` 生成 root 无密码配置，并确认 `skip_grant_tables=ON`。
+
+Windows 显示 `TcpTestSucceeded : False`：检查虚拟机 IP、MySQL 服务、`bind-address`、3306 监听和防火墙来源地址。
+
+把 `mysql -h ...` 或 `systemctl` 输入到 `mysql>`：先执行 `exit` 回到 bash/PowerShell。`SELECT`、`CREATE USER`、`GRANT` 才是在 `mysql>` 中运行的 SQL。

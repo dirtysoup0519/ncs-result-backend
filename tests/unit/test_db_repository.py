@@ -1,7 +1,12 @@
 import sqlite3
 from datetime import timezone
 
-from ncs_backend.query.db_repository import DbApiDashboardRepository, _datetime_value, _monthly_trend_rows
+from ncs_backend.query.db_repository import (
+    DbApiDashboardRepository,
+    _business_datetime_value,
+    _datetime_value,
+    _monthly_trend_rows,
+)
 
 
 def _repository(tmp_path):
@@ -123,8 +128,40 @@ def test_db_repository_aligns_profile_series_and_hides_future_actuals(tmp_path):
 
     prediction = repository.fetch("prediction", {"date": "2019-09-13", "cutoffHour": 16})
     assert len(prediction.data["actual"]) == 1
-    assert prediction.data["actual"][0]["time"].endswith("15:00:00+08:00")
+    assert prediction.data["actual"][0] == {
+        "hour": 15,
+        "orderCount": 8,
+        "chargingEnergy": "12.00",
+        "isObserved": True,
+    }
     assert len(prediction.data["forecast"]) == 1
+    assert prediction.data["forecast"][0] == {
+        "hour": 16,
+        "predictedEnergy": "13.50",
+        "lowerBound": "11.00",
+        "upperBound": "16.00",
+    }
+
+
+def test_unavailable_prediction_uses_frozen_null_contract(tmp_path):
+    repository = _repository(tmp_path)
+
+    prediction = repository.fetch("prediction", {"date": "2020-01-01", "cutoffHour": 16})
+
+    assert prediction.data == {
+        "availability": "UNAVAILABLE",
+        "date": None,
+        "cutoffHour": None,
+        "forecastStartAt": None,
+        "energyUnit": "kWh",
+        "orderCountUnit": "count",
+        "actual": [],
+        "forecast": [],
+        "interval": {"available": False, "confidenceLevel": None},
+        "modelVersion": None,
+        "predictionRunId": None,
+        "generatedAt": None,
+    }
 
 
 def test_mysql_naive_timestamp_is_serialized_as_utc():
@@ -133,6 +170,13 @@ def test_mysql_naive_timestamp_is_serialized_as_utc():
     assert value is not None
     assert value.tzinfo == timezone.utc
     assert value.isoformat() == "2026-09-14T09:06:27+00:00"
+
+
+def test_prediction_naive_timestamp_uses_business_timezone():
+    value = _business_datetime_value("2015-12-28 18:00:00")
+
+    assert value is not None
+    assert value.isoformat() == "2015-12-28T18:00:00+08:00"
 
 
 def test_daily_trend_rows_can_be_aggregated_for_month_view():

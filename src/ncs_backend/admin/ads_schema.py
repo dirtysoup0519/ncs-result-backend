@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 12
+ADS_MIGRATION_VERSION = 13
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -24,6 +24,14 @@ ADS_RESULT_TABLES = (
     "rpt_station_reference",
     "rpt_station_hour_daily",
     "rpt_load_hourly",
+    "rpt_station_top10_snapshot",
+    "rpt_station_hour_heatmap_profile",
+    "rpt_revenue_monthly",
+    "rpt_kpi_period_comparison",
+    "rpt_weekday_hour_profile",
+    "rpt_charge_type_distribution",
+    "rpt_station_charge_type",
+    "rpt_process_overview",
 )
 ADS_VIEW_NAMES = (
     "api_v1_data_status",
@@ -257,6 +265,86 @@ ADS_SCHEMA_SQL = (
         PRIMARY KEY (batch_id, stat_time)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_top10_snapshot (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL,
+        rank_order INTEGER NOT NULL, station_id VARCHAR(64) NOT NULL, station_name VARCHAR(255) NOT NULL,
+        location_id VARCHAR(64), order_count BIGINT NOT NULL, total_kwh DECIMAL(24,8) NOT NULL,
+        total_fees DECIMAL(24,8) NOT NULL, ranking_metric VARCHAR(64) NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, start_date, end_date, rank_order)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_hour_heatmap_profile (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL,
+        station_rank INTEGER NOT NULL, station_id VARCHAR(64) NOT NULL, station_name VARCHAR(255) NOT NULL,
+        stat_hour INTEGER NOT NULL, order_count BIGINT NOT NULL, total_kwh DECIMAL(24,8) NOT NULL,
+        total_fees DECIMAL(24,8) NOT NULL, is_filled_zero BOOLEAN NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, start_date, end_date, station_rank, stat_hour)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_revenue_monthly (
+        batch_id VARCHAR(128) NOT NULL, stat_month VARCHAR(16) NOT NULL, order_count BIGINT NOT NULL,
+        total_kwh DECIMAL(24,8) NOT NULL, total_fees DECIMAL(24,8) NOT NULL, user_count BIGINT NOT NULL,
+        active_station_count BIGINT NOT NULL, data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (batch_id, stat_month)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_kpi_period_comparison (
+        batch_id VARCHAR(128) NOT NULL, current_period VARCHAR(32) NOT NULL, previous_period VARCHAR(32) NOT NULL,
+        metric_code VARCHAR(64) NOT NULL, metric_name VARCHAR(255) NOT NULL, unit VARCHAR(32) NOT NULL,
+        current_value DECIMAL(24,8) NOT NULL, previous_value DECIMAL(24,8) NOT NULL, change_pct DECIMAL(24,8) NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, current_period, metric_code)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_weekday_hour_profile (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, day_type VARCHAR(32) NOT NULL,
+        stat_hour INTEGER NOT NULL, order_count BIGINT NOT NULL, total_kwh DECIMAL(24,8) NOT NULL,
+        total_fees DECIMAL(24,8) NOT NULL, avg_charge_hours DECIMAL(24,8) NOT NULL, data_version VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+        loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (batch_id, start_date, end_date, day_type, stat_hour)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_charge_type_distribution (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, facility_type VARCHAR(64) NOT NULL,
+        charge_type VARCHAR(64) NOT NULL, order_count BIGINT NOT NULL, order_ratio DECIMAL(24,8) NOT NULL,
+        total_kwh DECIMAL(24,8) NOT NULL, total_fees DECIMAL(24,8) NOT NULL, avg_charge_hours DECIMAL(24,8) NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, start_date, end_date, facility_type)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_station_charge_type (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, station_id VARCHAR(64) NOT NULL,
+        station_name VARCHAR(255) NOT NULL, facility_type VARCHAR(64) NOT NULL, charge_type VARCHAR(64) NOT NULL,
+        order_count BIGINT NOT NULL, total_kwh DECIMAL(24,8) NOT NULL, total_fees DECIMAL(24,8) NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, start_date, end_date, station_id, facility_type)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rpt_process_overview (
+        batch_id VARCHAR(128) NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, record_count BIGINT NOT NULL,
+        session_count BIGINT NOT NULL, avg_soc DECIMAL(24,8), avg_temperature DECIMAL(24,8),
+        avg_pack_voltage DECIMAL(24,8), avg_current DECIMAL(24,8), record_time_source VARCHAR(64) NOT NULL,
+        data_version VARCHAR(64) NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staleness VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN', loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (batch_id, start_date, end_date)
+    )
+    """,
 )
 
 ADS_INDEX_SQL = (
@@ -272,6 +360,14 @@ ADS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_rpt_station_reference_batch ON rpt_station_reference (batch_id, station_id)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_station_hour_daily_batch_date ON rpt_station_hour_daily (batch_id, data_date, station_id, stat_hour)",
     "CREATE INDEX IF NOT EXISTS idx_rpt_load_hourly_batch_time ON rpt_load_hourly (batch_id, stat_time)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_station_top10_batch ON rpt_station_top10_snapshot (batch_id, rank_order)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_heatmap_profile_batch ON rpt_station_hour_heatmap_profile (batch_id, station_rank, stat_hour)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_revenue_monthly_batch ON rpt_revenue_monthly (batch_id, stat_month)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_kpi_comparison_batch ON rpt_kpi_period_comparison (batch_id, current_period)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_weekday_hour_batch ON rpt_weekday_hour_profile (batch_id, day_type, stat_hour)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_charge_type_batch ON rpt_charge_type_distribution (batch_id, facility_type)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_station_charge_type_batch ON rpt_station_charge_type (batch_id, station_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rpt_process_overview_batch ON rpt_process_overview (batch_id, end_date)",
 )
 
 ADS_MYSQL_INDEX_SQL = (
@@ -287,6 +383,14 @@ ADS_MYSQL_INDEX_SQL = (
     "CREATE INDEX idx_rpt_station_reference_batch ON rpt_station_reference (batch_id, station_id)",
     "CREATE INDEX idx_rpt_station_hour_daily_batch_date ON rpt_station_hour_daily (batch_id, data_date, station_id, stat_hour)",
     "CREATE INDEX idx_rpt_load_hourly_batch_time ON rpt_load_hourly (batch_id, stat_time)",
+    "CREATE INDEX idx_rpt_station_top10_batch ON rpt_station_top10_snapshot (batch_id, rank_order)",
+    "CREATE INDEX idx_rpt_heatmap_profile_batch ON rpt_station_hour_heatmap_profile (batch_id, station_rank, stat_hour)",
+    "CREATE INDEX idx_rpt_revenue_monthly_batch ON rpt_revenue_monthly (batch_id, stat_month)",
+    "CREATE INDEX idx_rpt_kpi_comparison_batch ON rpt_kpi_period_comparison (batch_id, current_period)",
+    "CREATE INDEX idx_rpt_weekday_hour_batch ON rpt_weekday_hour_profile (batch_id, day_type, stat_hour)",
+    "CREATE INDEX idx_rpt_charge_type_batch ON rpt_charge_type_distribution (batch_id, facility_type)",
+    "CREATE INDEX idx_rpt_station_charge_type_batch ON rpt_station_charge_type (batch_id, station_id)",
+    "CREATE INDEX idx_rpt_process_overview_batch ON rpt_process_overview (batch_id, end_date)",
 )
 
 ADS_VIEW_SQL = (
