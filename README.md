@@ -599,25 +599,28 @@ tail -n 100 ../ncs-ads-exchange/logs/sync_ads.log
 
 成功后数据包和标记进入 `../ncs-ads-exchange/archive/`；失败时进入 `../ncs-ads-exchange/rejected/`，详细错误写入 `../ncs-ads-exchange/logs/`。
 
-前台验证轮询：
+前台验证轮询（推荐用一键脚本，等价于手工 source + watch_ads.sh）：
 
 ```bash
-source ../ncs-runtime/ads-sync.env
-./scripts/shell/watch_ads.sh
+./scripts/shell/start_ads_sync.sh                     # 前台监听，Ctrl+C 停止
+./scripts/shell/start_ads_sync.sh --once              # 只跑一轮并打印退出码
+./scripts/shell/start_ads_sync.sh --detach            # 后台常驻（nohup + pid 文件）
+./scripts/shell/start_ads_sync.sh --stop              # 停止后台监听
+./scripts/shell/start_ads_sync.sh --env /path/ads-sync.env  # 指定环境文件
 ```
 
-确认正常后按 `Ctrl+C` 停止，再在 `hadoop` 用户的 `crontab -e` 中加入：
+默认读取 `<仓库>/../ncs-runtime/ads-sync.env`，也可用 `NCS_ADS_SYNC_ENV` 环境变量指定。后台模式的 pid 文件在 `<交换目录>/locks/watch_ads.pid`，日志在 `<交换目录>/logs/watch_ads.log`；重复 `--detach` 会被拒绝，防止双实例。
+
+确认前台运行正常后按 `Ctrl+C` 停止，再切换到后台常驻：
+
+```bash
+./scripts/shell/start_ads_sync.sh --detach
+```
+
+如需开机自启，在 `hadoop` 用户的 `crontab -e` 中加入：
 
 ```cron
-@reboot cd ./ncs-result-backend && /bin/bash -lc 'source ../ncs-runtime/ads-sync.env; exec ./scripts/shell/watch_ads.sh >> ../ncs-ads-exchange/logs/watch.log 2>&1'
-```
-
-立即启动一次：
-
-```bash
-cd ./ncs-result-backend
-nohup /bin/bash -lc 'source ../ncs-runtime/ads-sync.env; exec ./scripts/shell/watch_ads.sh' \
-  >> ../ncs-ads-exchange/logs/watch.log 2>&1 &
+@reboot cd ~/ncs-result-backend && ./scripts/shell/start_ads_sync.sh --detach
 ```
 
 检查：
