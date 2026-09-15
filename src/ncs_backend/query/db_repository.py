@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from ncs_backend.query.repository import EmptyDashboardRepository, QueryPayload
@@ -181,7 +181,10 @@ class DbApiDashboardRepository:
                 "displayName": row.get("display_name"),
                 "orderCount": _integer(row.get("order_count")),
                 "totalFees": _decimal_text(row.get("total_fees")),
-                "orderRatio": _decimal_text(row.get("order_ratio")) if row.get("order_ratio") is not None else _ratio_text(row.get("order_count"), total),
+                # The upstream ratio is a percentage rounded to two decimal
+                # places before import.  Recompute it from the reconciled
+                # counts so the API ratio remains internally consistent.
+                "orderRatio": _ratio_text(row.get("order_count"), total),
             }
             for row in rows
         ]
@@ -199,6 +202,7 @@ class DbApiDashboardRepository:
             """,
             values,
         )
+        total = sum(_integer(row.get("order_count")) for row in rows)
         items = [
             {
                 "bucketCode": _duration_bucket_code(row.get("bucket_code"), row.get("label")),
@@ -206,7 +210,7 @@ class DbApiDashboardRepository:
                 "lowerMinutes": _integer(row.get("lower_minutes")),
                 "upperMinutes": _integer(row.get("upper_minutes")) if row.get("upper_minutes") is not None else None,
                 "orderCount": _integer(row.get("order_count")),
-                "ratio": _decimal_text(row.get("ratio")),
+                "ratio": _ratio_text(row.get("order_count"), total),
             }
             for row in rows
         ]
@@ -636,7 +640,9 @@ def _metric_value(value: Any, unit: Any) -> int | str | None:
 def _ratio_text(numerator: Any, denominator: int) -> str:
     if not denominator:
         return "0"
-    return _decimal_text(Decimal(int(numerator)) / Decimal(denominator)) or "0"
+    ratio = Decimal(int(numerator)) / Decimal(denominator)
+    text = format(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP), ".6f")
+    return text.rstrip("0").rstrip(".")
 
 
 def _split_ids(value: Any) -> list[str]:
