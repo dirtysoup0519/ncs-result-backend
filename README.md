@@ -1,16 +1,86 @@
 # NCS 结果库与后端
 
-当前统一业务、架构和代码规划见 `docs/项目业务架构与代码规划.md`。现有代码已完成 ADS v2.1 到 Windows MySQL 8.0.46 的历史联调；最新 ADS Spark v2.3 已核验但尚未适配，当前虚拟机 MySQL 5.7.35 也尚未完成项目建库和权限验收。
+本仓库负责新能源汽车充电桩项目的后半段链路：接收上游 Spark/Hive ADS 结果，批次化发布到 MySQL 结果库，通过 Flask 提供大屏查询接口，并使用外部提供的模型与权重生成预测结果。模型训练、ODS/DWD/DWS/ADS 生产逻辑和前端源码不在本仓库范围。
 
-查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。9 个当前必需视图已通过真实 MySQL 验证；预测视图属于可选上游能力，不作为当前健康检查的阻断项。
+当前基线为 ADS Spark v2.5、MySQL 5.7.35、Python 3.11/3.12、Flask、Vue 3 与 Node.js 23+。虚拟机 MySQL、18个ADS数据集、10个查询视图、测试模型推理和前端预测接口均已完成真实联调。统一业务、架构和后续规划见 `docs/项目业务架构与代码规划.md`。
 
-当前范围只包含处理后数据的结果库、数据管理后端和大屏查询后端。机器学习训练、推理、模型管理及特征处理不在当前范围；上游若提供预测结果，本项目按普通处理后数据集导入和发布。范围决策见 `docs/当前范围决策.md`，历史 ML 原型仅保存在 `archive/ml-control-plane-prototype`。
+查询仓储通过 `inspect_view_contracts` / `assert_view_contracts` 检查白名单 `api_v1_*` 视图合同。查询账号只允许读取固定视图，管理账号负责数据导入，迁移账号负责结构变更；应用不得使用 MySQL `root`。
 
-最终实训环境采用 Python 3.11 或 3.12；上游使用 Hadoop 3.x 与 Spark SQL/PySpark 产生 ADS，MySQL 运行在虚拟机内。数据管理程序支持 Windows 远程导入和虚拟机就地处理两种部署模式，Windows Flask 通过虚拟机 IP 查询。设计见 `docs/双运行位置数据接入设计.md`。前端单独使用 Node.js 23+、Vue 3 和 DataV。
+## 当前运行结构
 
-向前端交接项目时不要直接压缩工作目录。数据库密码放在被忽略的 `.local/ncs.env`，前端只使用查询 API 和可选开发 API Key；快速说明见 `docs/前端联调交接说明.md`，从下载仓库开始的完整步骤见 `docs/仓库下载与联调操作手册.md`。
+```text
+上游 Spark/Hive ADS
+  -> ADS v2.5 ZIP/TAR.GZ + .ready
+  -> 虚拟机 Shell 自动同步
+  -> 虚拟机 MySQL 5.7.35 / ncs_analytics
+  -> Windows Flask API :5000
+  -> Vue 3 大屏 :5173
 
-前端 `ncs-dashboard.zip` 只作为只读联调依据，不纳入或修改其源码。实际请求与联调门禁见 `docs/前端代码包只读评审.md`。
+外部模型包 + 已发布 load_hourly
+  -> 后端模型适配器与推理
+  -> api_v1_load_prediction
+  -> 大屏 AI 预测组件
+```
+
+MySQL 固定运行在虚拟机 `192.168.176.100:3306`。数据管理同时支持 Windows 远程导入和虚拟机就地自动导入；前端源码位于独立目录，仅作为只读联调对象。
+
+## 虚拟机自动同步
+
+当前自动同步部署在：
+
+```text
+代码：/home/hadoop/ncs-result-backend
+运行环境：/home/hadoop/ncs-runtime/venv
+本地配置：/home/hadoop/ncs-runtime/ads-sync.env
+交换目录：/home/hadoop/ncs-ads-exchange
+日志：/home/hadoop/ncs-ads-exchange/logs
+```
+
+轮询脚本默认每30秒检查一次，并通过用户 `crontab @reboot` 随虚拟机启动。上游必须先完整上传数据包，再创建同名完成标记：
+
+```text
+/home/hadoop/ncs-ads-exchange/ready/<package>.zip
+/home/hadoop/ncs-ads-exchange/ready/<package>.zip.ready
+```
+
+服务只处理同时存在数据包和 `.ready` 的任务。成功文件进入 `archive/`，失败文件进入 `rejected/`，半包不会导入。支持 `.zip` 和 `.tar.gz`，包内必须且只能识别到一个 `manifest.json`。
+
+虚拟机检查命令：
+
+```bash
+ps -ef | grep '[w]atch_ads.sh'
+crontab -l
+tail -f /home/hadoop/ncs-ads-exchange/logs/sync_ads.log
+find /home/hadoop/ncs-ads-exchange/ready -maxdepth 1 -type f
+find /home/hadoop/ncs-ads-exchange/rejected -maxdepth 1 -type f
+```
+
+当前虚拟机系统Python仍为3.10.13，自动ADS导入已经验证可运行；正式验收环境必须升级到项目要求的Python 3.11或3.12。模型自动推理尚未在虚拟机常驻任务中启用，因为虚拟机还需安装PyTorch并部署模型包。
+
+## 前后端联调
+
+数据库密码放在被忽略的 `.local/ncs.env`。前端只访问查询API，不直接连接MySQL。启动查询服务：
+
+```powershell
+python scripts/run_query.py
+```
+
+前端位于相邻目录时，可以使用：
+
+```powershell
+.\start_project.cmd
+```
+
+启动脚本检测到 `5000` 或 `5173` 已被占用时会保留已有进程，不会自动重启。代码或 `.env.local` 变化后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动，否则页面可能仍使用旧接口或旧配置。
+
+当前测试预测批次参数为：
+
+```dotenv
+VITE_PREDICTION_DATE=2015-12-28
+VITE_PREDICTION_CUTOFF_HOUR=17
+```
+
+这些参数只用于当前测试数据。ADS刷新并重新生成预测后，必须同步更新前端本地配置，或后续改为由后端元数据动态提供。
 
 ## 环境准备与前置工作（新成员必读）
 
@@ -156,7 +226,7 @@ python scripts/init_local_database.py --sqlite .local/ncs.sqlite
 python scripts/admin_cli.py check-local-database --sqlite .local/ncs.sqlite
 ```
 
-统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发；真实 MySQL 迁移和 ADS v2.1 导入已经验收，连接凭据仍必须通过环境变量配置且不得进入 Git。
+统一初始化会创建控制表、staging 表和迁移记录，支持重复执行。生成的 `.local/ncs.sqlite` 已被 Git 忽略，只用于本地开发；真实 MySQL 迁移和 ADS v2.5 的18数据集导入已经验收，连接凭据仍必须通过环境变量配置且不得进入 Git。
 
 数据库窗口连接该开发库时，在当前终端设置连接地址后启动：
 
@@ -184,7 +254,7 @@ python scripts/run_local.py console
 
 管理服务已提供受控的 `/internal/v1` 路由骨架：数据集登记/列表、Schema 列表、批次创建/查询/筛选、质量完成与筛选查询、发布历史/详情、当前活动发布、发布和按目标批次回滚。路由必须注入对应应用服务后才会执行写操作，未配置依赖时返回 `DEPENDENCY_NOT_READY`。
 
-ADS v2.1 已提供同步管理入口 `POST /internal/v1/ads-v21/imports`。它接收服务器本地解压目录并选择 `A0`/`B` 波次；迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
+当前 ADS v2.5 使用兼容入口 `POST /internal/v1/ads-v23/imports`，接收服务器本地解压目录；命令行入口为 `scripts/import_ads_v23.py`。名称保留 `v23` 是为了兼容既有调用，实际 Schema `2.2.0` 对应最新 v2.5 的18数据集。历史 `POST /internal/v1/ads-v21/imports` 仅保留兼容，不作为新接入入口。迁移和建表必须提前由迁移账号执行，管理接口只使用 DML 权限。
 
 MySQL 迁移、固定视图授权和三账号权限自检使用：
 
