@@ -395,6 +395,48 @@ data_exchange/
 
 脚本支持解压目录、`.zip`、`.tar.gz` 和 `.tgz`，会校验包路径、Manifest、Schema、哈希、行数和主键，然后将合格批次发布到 `.local/ncs.env` 指向的虚拟机 MySQL。原始数据包不会被修改或删除。
 
+#### 更新已有业务数据
+
+更新数据不需要重新建库，也不要直接修改 `rpt_*` 表。每个新批次使用新的文件名和 `sourceBatchId`，保留旧包以便审计和回滚。
+
+Windows 手工更新：
+
+```powershell
+# 1. 把最新 ADS v2.5 包复制到 data_exchange/packages/
+# 2. 明确指定新包，避免误选旧包
+.\import_data_package.cmd ".\data_exchange\packages\ads-v25-20260915.zip"
+```
+
+导入器会在事务中完成校验、暂存、发布和旧批次切换；失败时旧的 `PUBLISHED` 批次保持不变。导入成功后刷新：
+
+```text
+GET /api/v1/meta/data-status
+GET /api/v1/dashboard/overview
+```
+
+虚拟机 Shell 自动更新：
+
+```bash
+# 在虚拟机完成复制后再生成 .ready 标记
+cp batch-002.zip "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.part"
+mv "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.part" \
+   "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip"
+touch "$NCS_ADS_EXCHANGE_ROOT/ready/batch-002.zip.ready"
+
+# 立即处理一次；持续监听则运行 watch_ads.sh
+./scripts/shell/sync_ads_once.sh
+```
+
+不要在文件仍在传输时创建 `.ready`，不要同时运行多个同步进程。Shell 和 Windows 导入使用同一套校验、幂等和发布逻辑。
+
+新 ADS 批次导入后，如果需要刷新 AI 预测，确认模型仍在 `./data_exchange/models/`，然后执行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\ensure_prediction_data.py
+```
+
+该命令会根据最新已发布的 `load_hourly` 批次重新生成预测；若该批次已有 `PUBLISHED` 预测，则自动跳过。只更新模型、不更新 ADS 数据时，也执行同一命令即可。
+
 导出数据库中全部机器学习数据集：
 
 ```powershell
