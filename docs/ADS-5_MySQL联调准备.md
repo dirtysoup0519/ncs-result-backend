@@ -18,8 +18,7 @@
 
 - MySQL 8.0 及以上版本，确认结果库不是与 Hive 元数据共用的实例；
 - 提供测试库 URL、字符集、时区和 SQL mode；
-- 安装可选依赖 `PyMySQL`；
-- 准备迁移/管理账号和查询只读账号，凭据只通过环境变量或受保护的 CI Secret 传递。
+- 安装可选依赖 `PyMySQL`。
 
 ## 验证命令
 
@@ -29,38 +28,7 @@ python scripts/verify_mysql_ads.py --initialize
 pytest -q tests/integration/test_mysql_ads.py
 ```
 
-统一初始化、授权和三账号自检：
-
-```powershell
-$env:NCS_MYSQL_MIGRATOR_URL = "mysql+pymysql://<migrator>:<password>@<host>:3306/<database>"
-$env:NCS_MYSQL_PRIVILEGED_URL = "mysql+pymysql://<privileged>:<password>@<host>:3306/<database>"
-$env:NCS_MYSQL_ADMIN_URL = "mysql+pymysql://<admin>:<password>@<host>:3306/<database>"
-$env:NCS_MYSQL_READER_URL = "mysql+pymysql://<reader>:<password>@<host>:3306/<database>"
-python scripts/setup_mysql_ads.py --initialize --grant-reader --verify
-```
-
-`--grant-reader` 仅向固定 `api_v1_*` 视图授予 `SELECT`，不创建账号、不修改密码。`--verify` 检查迁移账号具备 DDL、管理账号仅具备 DML、查询账号能读取全部必需视图且不能读取物理结果表和控制表。
-
-完整端到端验收入口：
-
-```powershell
-$env:NCS_ADS_V21_PACKAGE = "<extracted-package-directory>"
-python scripts/verify_mysql_e2e.py
-```
-
-复用上述迁移、管理、查询账号环境变量。脚本要求三个 URL 指向同一数据库，并执行两次幂等导入、必需视图合同、12 个非模型查询请求和事务回滚探针。回滚探针使用唯一临时批次，预期不留下控制记录或结果行；只应对测试/联调数据库运行。
-
 不带 `--initialize` 时只检查服务器元信息和 `api_v1_*` 视图合同；带 `--initialize` 才会执行控制表、结果表和视图迁移。脚本不会执行上游联调包中的 `TRUNCATE` 或 `LOAD DATA` SQL。
-
-## 权限边界
-
-| 账号 | 允许 | 禁止 |
-| --- | --- | --- |
-| `ncs_ads_migrator` | 迁移表、控制表、结果表、视图的 DDL | 业务查询账号使用该身份 |
-| `ncs_ads_admin` | 控制表、staging、结果表的导入、质量和发布 | 任意库管理、用户管理 |
-| `ncs_ads_reader` | 仅 `api_v1_*` 视图的 `SELECT` | 物理结果表、控制表、staging、写入和 DDL |
-
-查询后端只使用 `ncs_ads_reader`。权限验证必须在 MySQL 实例中分别用三个账号执行，不能仅凭应用配置推断。
 
 ## 验收记录模板
 

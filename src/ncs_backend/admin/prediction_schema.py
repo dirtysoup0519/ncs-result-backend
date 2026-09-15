@@ -124,13 +124,18 @@ PREDICTION_V2_STATEMENTS = (
     """,
 )
 
-# A prediction is only as current as the hourly batch it was computed from.  The
-# importer supersedes the previous publication of a dataset but leaves the runs
-# that consumed it untouched, so a stale run stays PUBLISHED forever and -- since
-# the read path picks the newest business date -- it can outrank a fresh run for
-# an earlier date.  Tie the view to the source publication so a forecast leaves
-# the read contract at the same moment its input data does.  Depends on
-# ctl_publication, which the ADS result schema owns.
+# A prediction is only as current as the hourly batch it was computed from.  A
+# run's own status records an execution fact -- the run finished and wrote its
+# rows -- and it stays PUBLISHED as history even after the batch it consumed is
+# superseded; whether that run may still be *served* is a separate question,
+# answered by the current publication state of its source batch.  This view is
+# the serving contract that combines the two, so it is what keeps a forecast
+# derived from superseded data out of the read path -- and, since the read path
+# picks the newest business date, a stale run for a later date can no longer
+# outrank a fresh run for an earlier one.  Read forecasts through
+# api_v1_load_prediction; querying ctl_prediction_run.status directly reports
+# every historical run as live.  Depends on ctl_publication, which the ADS
+# result schema owns.
 PREDICTION_V3_STATEMENTS = (
     "DROP VIEW IF EXISTS api_v1_load_prediction",
     """

@@ -20,6 +20,15 @@ requires_flock = pytest.mark.skipif(
     reason="sync_ads_once.sh takes a flock lock; run on Linux (util-linux) to exercise these",
 )
 
+# Every test here drives start_ads_sync.sh through bash.  Without it on PATH the
+# spawn dies with FileNotFoundError, which reads as a regression rather than as a
+# missing prerequisite -- and on Windows bash is present only when Git Bash's
+# bin directory happens to be on PATH.
+pytestmark = pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="these tests drive scripts/shell/*.sh through bash, which is not on PATH",
+)
+
 STUB_PYTHON = (
     "#!/usr/bin/env python3\n"
     "import sys\n"
