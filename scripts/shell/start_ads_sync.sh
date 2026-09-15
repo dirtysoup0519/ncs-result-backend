@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # Zero-config starter for the VM ADS sync watcher.
 # Baseline assumption: the VM provides ONLY MySQL (root@127.0.0.1, skip-grant
 # recovery mode). Everything else is bootstrapped automatically:
-#   - picks the best available Python (3.12 > 3.11 > 3.10 > 3, warns on <3.11)
+#   - picks the best available Python (3.12 > 3.11 > 3.10 > 3)
 #   - ensures PyMySQL is importable (pip install, skippable via NCS_PIP_INSTALL=0)
 #   - creates the exchange directory tree
 #   - generates <repo>/../ncs-runtime/ads-sync.env on first run
@@ -74,10 +74,6 @@ find_python() {
   return 1
 }
 
-python_at_least() {  # $1=major $2=minor  via "$NCS_PYTHON_BIN"
-  "$NCS_PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= ($1, $2) else 1)" 2>/dev/null
-}
-
 # --- bootstrap: env file -----------------------------------------------------
 if [[ "$STOP" -eq 0 && ! -f "$ENV_FILE" ]]; then
   # Validate before writing: a bad value baked into the generated file would
@@ -136,10 +132,6 @@ if [[ "$STOP" -eq 0 ]]; then
     else
       say "WARNING: PyMySQL missing and NCS_PIP_INSTALL=0; import will fail until installed"
     fi
-  fi
-  if ! python_at_least 3 11; then
-    VER="$("$NCS_PYTHON_BIN" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
-    say "WARNING: $NCS_PYTHON_BIN is Python $VER; final acceptance requires 3.11/3.12 (import entry still works)"
   fi
 fi
 
