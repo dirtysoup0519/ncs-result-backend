@@ -10,7 +10,7 @@
 
 本文件定义各模块交换数据时必须共同遵守的语义，不规定 Hive SQL、MySQL DDL、Python 类或具体机器学习算法。
 
-最新 v2.5 交付采用 Schema/metric version `2.2.0`、`FULL_SNAPSHOT` 和 `SUCCESS` Manifest，共 18 个 CSV。v2.3 及更早版本只作为历史证据；当前字段、粒度和核验结论以 `ADS_v2.5自动同步与模型推理设计.md` 及包内 Manifest 为准。
+最新上游完整包为 v3.2，其下游 `contract_v2` 采用 Schema/metric version `2.2.0`、`FULL_SNAPSHOT` 和 `SUCCESS` Manifest，共 18 个 CSV。v2.3 及更早版本只作为历史证据；当前字段、粒度和核验结论以 `ADS_Spark_v3.2完整交接包评审.md` 及包内 Manifest 为准。
 
 核心目标：
 

@@ -3,6 +3,7 @@
 > 状态：首版已实施（2026-09-15 复核），剩余差距见第 3 节  
 > 工作分支：`feature/ads-shell-sync`  
 > 业务边界：本项目负责接收上游处理结果、管理结果库、加载已训练模型并执行推理；不负责训练或调参，不执行前端源码修改。
+> 当前交付覆盖：上游完整包已更新为 v3.2；本文件中的 v2.5 数据量和 `YEAR_PLUS_2000` 仅为历史回归记录。v3.2 仍兼容相同 18 数据集合同，最新数据事实见 `ADS_Spark_v3.2完整交接包评审.md`。
 
 ## 1. 结论
 
@@ -44,7 +45,7 @@ Shell 自动同步定义为“新批次完成后 30～60 秒内进入结果库�
 | `station_charge_type` | 351 | 站点 × 充电类型交叉分析 |
 | `process_overview` | 1 | 全周期充电过程概览 |
 
-`load_hourly` 保持 16,872 行连续小时数据，是推理输入的权威来源。
+旧 v2.5 `load_hourly` 为 16,872 行；当前 v3.2 新批次为 8,719 行，改用 `DURATION_PRORATED` 跨小时分摊。推理始终读取当前已发布 `load_hourly`，不依赖固定行数，但必须至少连续 512 小时。
 包内 `ml/history.csv` 与 `contract_v2/load_hourly.csv` 的时间戳逐行一致，`kwh` 数值逐行等价；差异仅是小数文本格式。因此正式推理不再重复导入 `history.csv`，统一读取结果库 `load_hourly`。
 
 ### 2.2 测试模型
@@ -276,7 +277,7 @@ MySQL 只登记路径、SHA-256、合同、指标和激活状态。
 5. 保留 `is_observed`、`fill_method` 和 `time_quality` 作为数据质量元信息，但当前五通道模型只将 `total_kwh` 和日历特征送入模型。
 6. 如果不足 512 行或出现断点，预测任务失败，旧预测继续有效。
 
-模型交接文档声称日历使用“未脱敏真实星期”，而 ADS v2.5 明确使用 `YEAR_PLUS_2000`，存在口径表述矛盾。当前权重以同包 `history.csv` 训练，应继续从规范化后的 `stat_time` 计算日历特征；下一版模型必须在 Manifest 明确 `calendarRule`。
+当前 v3.2 明确 `timeRule=UPSTREAM_FIXED_YEAR_2019`、`sourceWeekdayRule=SOURCE_WEEKDAY` 和 `allocation_method=DURATION_PRORATED`。旧测试权重基于上一批数据，技术上可加载但不能作为新口径的有效模型；下一版模型必须在 Manifest 明确日历规则、分摊规则和训练数据批次。
 
 ### 8.2 模型生命周期
 
@@ -398,7 +399,7 @@ python scripts/run_load_prediction.py \
 继续使用现有接口：
 
 ```http
-GET /api/v1/predictions/load?date=2015-12-28&cutoffHour=18&horizon=24
+GET /api/v1/predictions/load?date=<published-data-date>&cutoffHour=<cutoff-hour>&horizon=24
 ```
 
 响应保留：
@@ -410,7 +411,7 @@ GET /api/v1/predictions/load?date=2015-12-28&cutoffHour=18&horizon=24
 - `generatedAt`；
 - `interval.available=false`。
 
-当前前端开发配置仍使用 `2019-09-13 / 16`，而 v2.5 最新业务时间为 `2015-12-28 17:00:00`。联调时应由前端同学修改环境配置为已发布预测的日期和 cutoff；不能由后端伪造 2019 日期，也不能忽略客户端筛选参数返回另一日期的数据。
+前端必须从数据状态和预测响应取得当前业务日期/cutoff，不得写死旧批次日期。v3.2 使用 2019 时间口径，但仍必须以实际已发布批次为准，不能忽略客户端筛选参数返回另一日期的数据。
 
 ## 12. 实施阶段
 
@@ -476,7 +477,7 @@ SQLite 和虚拟机 MySQL 完成 18 个数据集的真实导入，批次状态�
 
 1. 确认架构固定为 `multiscale_conv_transformer_v1`，以后只换权重还是可能换结构。
 2. 解释交接文档与 checkpoint 中 MAE/RMSE 不一致的原因。
-3. 确认当前模型以 v2.5 `history.csv` 相同口径训练。
+3. 使用 v3.2 `load_hourly/history.csv` 重新训练或明确验证兼容性，确认 `UPSTREAM_FIXED_YEAR_2019`、`SOURCE_WEEKDAY` 和 `DURATION_PRORATED` 三项口径。
 4. 明确模型版本号，不能长期使用 `model_all.pth` 文件名充当版本。
 5. 后续权重必须附 `model_manifest.json`、SHA-256 和输入合同。
 6. 第一版不提供置信区间是否可接受。

@@ -4,7 +4,7 @@
 
 ## 1. 项目简介
 
-本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的 ADS v2.5 数据包，校验并发布到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
+本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的完整交付包（当前上游包 v3.2、下游 `contract_v2` Schema 2.2.0），校验并发布 18 个数据集到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
 
 本仓库负责：
 
@@ -29,7 +29,7 @@
 | 组件 | 要求 |
 | --- | --- |
 | Hadoop | 3.x，由上游负责 |
-| ADS | Spark v2.5，18 个数据集 |
+| ADS | 上游完整包 v3.2；下游合同 Schema 2.2.0，18 个数据集 |
 | MySQL | 5.7.35，实训恢复模式 |
 | Python | 3.11 或 3.12 |
 | 后端 | Flask + PyMySQL |
@@ -41,7 +41,7 @@
 
 ```text
 上游 Spark/Hive ADS
-  -> ADS v2.5 ZIP/TAR.GZ + 完成标记
+  -> v3.2 包内 contract_v2（18 个 CSV）ZIP/TAR.GZ + 完成标记
   -> 数据入口
        ├─ Windows 手工导入
        └─ 虚拟机 Shell 自动同步
@@ -404,7 +404,7 @@ data_exchange/
 Windows 手工更新：
 
 ```powershell
-# 1. 把最新 ADS v2.5 包复制到 data_exchange/packages/
+# 1. 把最新上游包中的 contract_v2 数据包复制到 data_exchange/packages/
 # 2. 明确指定新包，避免误选旧包
 .\import_data_package.cmd ".\data_exchange\packages\ads-v25-20260915.zip"
 ```
@@ -480,7 +480,7 @@ Get-Content .\.local\ncs.env | ForEach-Object {
   --skip-initialize
 ```
 
-脚本名称保留 `v23` 是为了兼容旧调用，当前实现会根据 Manifest 识别并导入 ADS v2.5 的 18 个数据集。
+脚本名称保留 `v23` 是为了兼容旧调用，当前实现会根据 Manifest 识别并导入 Schema 2.2.0 的 18 个数据集；当前上游完整包版本为 v3.2。
 
 ### 3.9 启动后端和前端
 
