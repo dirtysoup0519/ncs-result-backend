@@ -1,0 +1,54 @@
+:root {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  color: #203047;
+  background: #f3f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --bg: #f3f7fb;
+  --panel: #ffffff;
+  --border: #e5edf6;
+  --text: #203047;
+  --muted: #7f8ca1;
+  --blue: #4f86ff;
+  --teal: #31b5a7;
+  --orange: #f2a33a;
+  --purple: #805ad5;
+  --green: #35aa72;
+  --red: #e66060;
+  --shadow: 0 8px 26px rgba(44, 73, 112, 0.075);
+}
+
+* { box-sizing: border-box; }
+/* 解除固定最小尺寸：原先的 min-width:1280px / min-height:720px 会在窄屏产生横向滚动条。
+   响应式适配改由 .dashboard-viewport 的 data-layout 模式负责（见 dashboard.css）。 */
+html, body, #app { margin: 0; width: 100%; min-width: 0; min-height: 0; }
+body { min-height: 100vh; background: var(--bg); }
+button, input, select { font: inherit; }
+
+.panel {
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  /* 圆角取 dashboard.css 的 --radius-panel（自定义属性挂在 :root，跨文件全局生效）*/
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow);
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef3fa;
+  color: #6f8096;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;   /* 18 + 上下 3px padding = 24px，高度有明确来源 */
+  white-space: nowrap;
+}
+.status-chip--warning { background: #fff4e5; color: #b97b27; }
+.status-chip--demo { background: #f0ebff; color: #7355c3; }

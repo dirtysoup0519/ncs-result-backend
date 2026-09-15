@@ -1,0 +1,82 @@
+{
+  "formatVersion": "1.0",
+  "generatedAt": "2026-09-15T07:11:42.181202+00:00",
+  "source": "ncs_analytics published result database",
+  "filters": {
+    "startDate": null,
+    "endDate": null,
+    "stationId": null
+  },
+  "datasets": [
+    {
+      "datasetCode": "load_hourly",
+      "file": "load_hourly.csv",
+      "rowCount": 16872,
+      "columns": [
+        "stat_time",
+        "total_kwh",
+        "order_count",
+        "is_observed",
+        "fill_method",
+        "time_quality",
+        "allocation_method",
+        "data_version"
+      ],
+      "sha256": "2d21da218b22ef0664bf14e918cb94fcc5e96cee438299de20f56ecf2bcb48c4",
+      "purpose": "连续小时负荷预测主数据集；total_kwh 或 order_count 可作为预测目标"
+    },
+    {
+      "datasetCode": "station_hour_daily",
+      "file": "station_hour_daily.csv",
+      "rowCount": 4840,
+      "columns": [
+        "data_date",
+        "station_id",
+        "station_name",
+        "stat_hour",
+        "order_count",
+        "total_kwh",
+        "total_fees",
+        "data_version"
+      ],
+      "sha256": "cb838ac2992032e85ec6c7c1647ad0aaebbf1280b3d052d7946f3cc480bf8beb",
+      "purpose": "站点、日期、小时粒度特征数据集"
+    },
+    {
+      "datasetCode": "fee_energy_daily",
+      "file": "fee_energy_daily.csv",
+      "rowCount": 341,
+      "columns": [
+        "period_start",
+        "order_count",
+        "total_kwh",
+        "total_fees",
+        "data_version"
+      ],
+      "sha256": "89b18cdd1e2e60ccd2015c34545b62485dc2f7d3447ddcf0f210921f6b1c319a",
+      "purpose": "日粒度订单、电量、费用趋势特征数据集"
+    },
+    {
+      "datasetCode": "process_daily",
+      "file": "process_daily.csv",
+      "rowCount": 299,
+      "columns": [
+        "data_date",
+        "record_count",
+        "session_count",
+        "average_soc",
+        "average_current",
+        "average_voltage",
+        "average_max_temperature",
+        "data_version"
+      ],
+      "sha256": "82a7deaab9201dbb46ab263e5ecff49fbddb635a4658afd432bb8db38cde3aa6",
+      "purpose": "日粒度充电过程统计特征数据集"
+    }
+  ],
+  "notes": [
+    "只包含当前 PUBLISHED 批次，不包含控制表和未发布数据。",
+    "load_hourly 为连续小时序列；is_observed=0 表示该小时为补齐值。",
+    "时间戳沿用上游脱敏后的业务时间，不应解释为真实运营日期。"
+  ]
+}

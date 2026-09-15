@@ -1,0 +1,901 @@
+/* ==========================================================================
+   响应式外壳（Batch B）
+   布局状态由 useDashboardLayout.js 唯一决定，通过 .dashboard-viewport[data-layout]
+   注入到 CSS，全程纯 CSS 切换 → 组件树不重建 → ECharts 实例始终存活、零闪烁。
+     scale   ：等比缩放（transform），画布固定 1920×1080，禁止滚动
+     compact ：中心组全宽置顶 + 左右两列并排，允许纵向滚动
+     reflow  ：单列纵向排列，允许纵向滚动
+   ========================================================================== */
+
+/* ── Spacing tokens（Batch D-3）──
+   只服务「视觉自由」间距；**承重间距不使用 token**（值参与高度预算，见各处注释）。
+   阶梯：4 / 8 / 12 / 16。不引入 20/24（当前无用例）。 */
+:root {
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+
+  /* ── Radius tokens（Batch D-6）──
+     border-radius 不参与布局计算，统一它是**零几何风险**的视觉收口。
+     面板 14 是全屏最大的圆角；小卡片统一 10；控件 8；微装饰 4；
+     胶囊 999px / 正圆 50% 语义独立，不设 token。 */
+  --radius-panel: 14px;   /* 面板卡片（global.css .panel）*/
+  --radius-card: 10px;    /* 面板内小卡片 */
+  --radius-control: 8px;  /* 控件 / 按钮 */
+  --radius-deco: 4px;     /* 微装饰（≤6px 的小元素）*/
+
+  /* ── Font-size tokens（Batch D-7）──
+     数值档位命名（xs/sm/md/lg/xl），按「当前值」归组；语义层级由使用处表达。
+     ⚠ font-size 在本项目是**布局变量**：改值会牵动行高/面板预算/裁切边界，
+     变更前必须先改 §18 断言并重新实测（Top10/Insights 为已知的承重项）。 */
+  --font-size-xs: 11px;             /* 辅助提示 / Top10 行内 */
+  --font-size-sm: 12px;             /* 正文基准 / badge / 图例 */
+  --font-size-md: 13px;             /* 说明正文 / Donut 标签 */
+  --font-size-lg: 14px;             /* 强调 / 卡片标题 */
+  --font-size-xl: 15px;             /* Header 数值 */
+  --font-size-panel-title: 18px;    /* 面板标题 */
+}
+
+.dashboard-viewport { width: 100%; }
+
+/* ---------- Scale ---------- */
+.dashboard-viewport[data-layout='scale'] {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+/* 画布尺寸由行内 style 给定（1920×1080），此处只负责不参与 flex 收缩 */
+.dashboard-viewport[data-layout='scale'] .dashboard-canvas {
+  flex: 0 0 auto;
+  transform-origin: center center;
+}
+
+/* ---------- 防溢出兜底（Batch B.1） ----------
+   flex/grid 子项默认 min-width:auto，内容（长文字、宽 canvas）会把父元素撑开，
+   导致右边缘被 overflow-x:hidden 静默裁掉。
+   这里是「防御性」加固：当前实测无溢出，但为防止后续批次引入新的固定宽度，
+   统一允许所有响应式容器的直接子项收缩。 */
+.dashboard-viewport .dashboard-grid,
+.dashboard-viewport .dashboard-column,
+.dashboard-viewport .kpi-strip {
+  min-width: 0;
+}
+.dashboard-viewport .dashboard-column > *,
+.dashboard-viewport .kpi-strip > *,
+.dashboard-viewport .dashboard-grid > * {
+  min-width: 0;
+}
+
+/* ---------- Compact / Reflow ---------- */
+.dashboard-viewport[data-layout='compact'],
+.dashboard-viewport[data-layout='reflow'] {
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.dashboard-page {
+  width: 100%;
+  height: 100vh;
+  min-height: 720px;
+  padding: 12px 14px 8px;
+  display: grid;
+  grid-template-rows: 76px 104px minmax(0, 1fr) 32px;
+  gap: 9px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% -20%, rgba(79, 134, 255, .10), transparent 38%),
+    linear-gradient(180deg, #f7faff 0, var(--bg) 230px);
+}
+
+/* Scale：沿用原始值（画布已固定 1920×1080） */
+.dashboard-viewport[data-layout='scale'] .dashboard-page {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Compact / Reflow：解除 100vh 锁定，改为内容驱动高度 */
+.dashboard-viewport[data-layout='compact'] .dashboard-page,
+.dashboard-viewport[data-layout='reflow'] .dashboard-page {
+  height: auto;
+  min-height: 100vh;
+  overflow: visible;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  overflow: hidden;
+}
+.dashboard-brand { display: flex; align-items: center; gap: var(--sp-3); min-width: 430px; }
+.dashboard-brand__mark { width: 48px; height: 48px; position: relative; flex: 0 0 48px; }
+.dashboard-brand__mark span { position: absolute; width: 15px; border-radius: var(--radius-deco); bottom: 5px; transform: skewY(-28deg); }
+.dashboard-brand__mark span:nth-child(1) { height: 23px; left: 1px; background: #79a5ff; }
+.dashboard-brand__mark span:nth-child(2) { height: 35px; left: 16px; background: #4f86ff; }
+.dashboard-brand__mark span:nth-child(3) { height: 27px; left: 31px; background: #31b5a7; }
+.dashboard-brand p { margin: 0 0 4px; color: #7392bd; font-size: var(--font-size-sm); letter-spacing: 2.4px; font-weight: 700; }
+.dashboard-brand h1 { margin: 0; font-size: clamp(27px, 1.72vw, 33px); line-height: 1.08; letter-spacing: .8px; color: #203149; }
+
+.header-meta { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: clamp(8px, .75vw, 15px); min-width: 0; }
+.header-meta__item { display: flex; flex-direction: column; gap: 3px; padding-left: var(--sp-3); border-left: 1px solid #e4ebf3; }
+.header-meta__item span { font-size: var(--font-size-sm); color: #94a0b0; }
+.header-meta__item strong { font-size: var(--font-size-xl); color: #3b4d66; white-space: nowrap; }
+.header-meta__wide { min-width: 154px; }
+.header-state { color: #75869c; font-size: var(--font-size-sm); }
+.quality-badge, .mock-badge, .demo-badge, .stale-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;   /* 18 + 上下 3px padding = 24px，与 .status-chip 同契约 */
+  white-space: nowrap;
+}
+.quality-badge { background: #eef3fa; color: #6f8096; }
+.quality-badge.passed { background: #eaf8f1; color: #2f9566; }
+.quality-badge.warning { background: #fff4e5; color: #b97b27; }
+.quality-badge.failed { background: #ffeded; color: #c85656; }
+.mock-badge { background: #eef4ff; color: #587fc9; }
+.demo-badge { background: #f0ebff; color: #7355c3; }
+.stale-badge { background: #fff4e5; color: #b97b27; }
+.refresh-button { border: 0; border-radius: var(--radius-control); padding: var(--sp-2) var(--sp-3); background: #edf3ff; color: #4f75c5; cursor: pointer; font-size: var(--font-size-md); }
+.refresh-button span { display: inline-block; margin-right: 4px; font-size: var(--font-size-xl); }
+.refresh-button:disabled { opacity: .65; cursor: default; }
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.kpi-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-2); min-height: 0; position: relative; }
+.kpi-card { display: flex; align-items: center; min-width: 0; padding: 13px 16px; position: relative; overflow: hidden; color: var(--blue); }
+.kpi-card::after { content: ""; position: absolute; inset: auto -22px -40px auto; width: 104px; height: 104px; border-radius: 50%; background: currentColor; opacity: .05; }
+.kpi-icon { flex: 0 0 46px; height: 46px; display: grid; place-items: center; border-radius: var(--radius-card); margin-right: 13px; color: inherit; background: #edf3ff; font-size: var(--font-size-lg); font-weight: 800; }
+.kpi-card__content { min-width: 0; display: flex; flex-direction: column; }
+.kpi-card__label { color: #8491a3; font-size: var(--font-size-lg); }
+.kpi-card__value { margin: 4px 0 2px; color: #263950; font-size: clamp(25px, 1.72vw, 33px); line-height: 1.08; white-space: nowrap; }
+.kpi-card__value small { color: #8795a7; font-size: var(--font-size-sm); font-weight: 500; }
+/* Batch D-5：scale 档 KPI 数字改用**设计空间固定值**。
+   原 clamp(25px,1.72vw,33px) 的 vw 在 scale 模式与外层 transform **双重缩放**：
+   1440 视口 1.72vw=24.8px，再 ×0.75 = 视觉 18.6px，而设计语义应为 33×0.75 = 24.8px。
+   改固定 35px（较原上限 +2）后由 transform 自然缩放：1440 视觉 = 35×0.75 = 26.3px。
+   compact/reflow 无 transform，vw 单次缩放语义正确，保留原 clamp。 */
+.dashboard-viewport[data-layout='scale'] .kpi-card__value { font-size: 35px; }
+.kpi-card__content em { color: #a2adbb; font-size: var(--font-size-sm); font-style: normal; white-space: nowrap; }
+.kpi-card--blue { color: var(--blue); }
+.kpi-card--teal { color: var(--teal); }
+.kpi-card--orange { color: var(--orange); }
+.kpi-card--purple { color: var(--purple); }
+.kpi-card--green { color: var(--green); }
+.kpi-card--teal .kpi-icon { background: #e8f8f5; }
+.kpi-card--orange .kpi-icon { background: #fff4e4; }
+.kpi-card--purple .kpi-icon { background: #f1edff; }
+.kpi-card--green .kpi-icon { background: #eaf8f1; }
+.kpi-loading-wrap { grid-column: 1 / -1; display: flex; min-height: 0; }
+
+.dashboard-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, .88fr) minmax(560px, 1.52fr) minmax(400px, 1.12fr);
+  gap: 9px;
+}
+.dashboard-column { display: grid; gap: 9px; min-width: 0; min-height: 0; }
+/* Batch D-8：三列分界**像素级对齐**（改前实测 467.7 / 466.4 / 470.2，最大差 3.8px）。
+   机制：三列共用同一个分界比例 f=57%（相对列高），用 calc 把「分界之上 gap 数不同」精确补偿：
+     左列（分界之上有 2 个 gap）: row1=row2=calc(28.5% − 9px)
+     中列（分界之上有 1 个 gap）: row1=calc(57% − 9px)
+   三条缝在 scale 档（设计画布固定 1920×1080 ⇒ 列高恒定 821px）数学上严格相等；
+   scale 档整体被 transform 缩放 ⇒ 对 1440/1280×800 等同档视口同样成立。
+   compact 档列高随视口变化，固定比例无法跨视口像素对齐 —— 该档保留 fr 并登记接受的错落。 */
+.dashboard-column--left { grid-template-rows: calc(28.5% - 9px) calc(28.5% - 9px) minmax(0, 1fr); }
+/* Batch D-3：中列分界与左右列重合（scale 档实测 左490/右490），主内容区形成 2 行 × 3 列 */
+.dashboard-column--center { grid-template-rows: calc(57% - 9px) minmax(0, 1fr); }
+/* ── 右栏四块比例（Batch C2 重定） ──
+   Top10     auto        —— 尺寸**不动**（用户明确要求），仍由列表 max-height 封顶
+   Trend     .95fr       —— 略微让出空间（用户要求 ~0.9 倍）
+   Process   minmax(155px, auto) —— 改为**内容驱动**：指标卡从 ~106px 压到 ~68px 后，
+                            面板保持原高度只会留下大片空白，
+                            正是用户反馈的「容器大、信息密度反而低」
+   Insights  1fr         —— 吃掉上面释放出来的高度（用户要求放大）
+   分配来源：Process 释放 44px + Trend 让出 26px ⇒ Insights +70px（按 1920×1080 实测推算）
+   注意：Trend 的面板高度对绘图区是**高杠杆**的 —— 面板里有 40(头) + 6(padding) + ~66(图内边距)
+   共约 122px 固定成本，占原 257px 的 47%。所以面板 -10% ≈ 绘图区 -19%。
+   FeeEnergyTrend 的 grid 上下边距已同步收紧 14px 作为补偿（见该组件）。 */
+/* ── 右栏四块比例（Batch C.2 / C.6 / C.6b 定稿） ──
+   Top10     auto                —— 尺寸不动（用户明确要求），由列表 max-height 封顶
+   Trend     minmax(0, 1.22fr)   —— 略让
+   Process   minmax(140px, .67fr) —— **部分弹性**（见下）
+   Insights  minmax(200px, 1fr)  —— 吃剩余
+
+   ★★ Batch C.6b：Process 行由 `minmax(136px, auto)` 改为 `minmax(140px, <fr>)`。
+   原因是一次实测发现（见 docs 附录 G）：
+     · Insights 的富余**只存在于 1920×1080（+38px）、1715×1401（+73px）、390×844（+52px）**；
+       1600×1200 / 1024×768 的富余正好是 0px，1280×1024 的正文更是早已在被裁。
+     · 所以「抬高 Process 的 auto 下界」这条路是**死路**：它在没富余的档位会把
+       运营建议的正文裁掉（C.6 已把 1600 从 208 压到 199，正好卡在临界）。
+     · 给 Process 一个 **fr 上限**后它就变成「只在有富余时才长高」：
+       1?? ×fr 若小于下界则退回下界（无富余的档位 = 完全不长），
+       若大于下界则按比例分走富余（有富余的档位 = 长高）。
+   自返性风险与保险：max 不再是 auto，意味着 Process 的内容高度不再能撑开该行 ——
+   若内容超过被分配的高度就会裁切。故下界取 140px，而内容实测为 122px
+   （标题 40 + body 6 + summary padding 8 + 卡片 68），
+   即使「平均峰值温度」折成两行也只有 137px，仍在 140 以内。
+   已加诊断报告 Process 是否发生裁切。 */
+.dashboard-column--right {
+  grid-template-rows:
+    auto
+    calc(57% - 224px)                                   /* Batch D-8：与左右列分界像素对齐（57% − Top10 206 − 2×gap 18）*/
+    minmax(140px, .67fr)
+    minmax(200px, 1fr);
+}
+.dashboard-column--right .panel-header { flex-basis: 48px; min-height: 48px; padding-top: 6px; padding-bottom: 4px; }
+.dashboard-column--right .panel-header--compact { flex-basis: 40px; min-height: 40px; }
+.dashboard-column--right .panel-body { padding: 1px 8px 5px; }
+
+.dashboard-panel, .insights-panel { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.panel-header { flex: 0 0 50px; min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px 6px; }
+.panel-title-wrap { min-width: 0; }
+.panel-title { color: #2a3b52; font-size: var(--font-size-panel-title); line-height: 1.18; font-weight: 700; }
+.panel-header--compact { flex-basis: 42px; min-height: 42px; padding-top: 7px; padding-bottom: 5px; }
+.panel-header--compact .panel-title { font-size: var(--font-size-panel-title); }
+.panel-subtitle { margin-top: 3px; color: #9aa6b5; font-size: var(--font-size-sm); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-action { display: flex; gap: var(--sp-2); align-items: center; flex: 0 0 auto; }
+.panel-body { min-height: 0; flex: 1; padding: 2px 8px 8px; }
+.chart { width: 100%; height: 100%; min-height: 0; }
+
+.panel-state { width: 100%; height: 100%; min-height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 14px; text-align: center; color: var(--muted); border-radius: var(--radius-card); background: linear-gradient(135deg, #fbfdff, #f5f8fc); }
+.panel-state--unavailable { background: repeating-linear-gradient(135deg, #f8faff, #f8faff 9px, #f4f7fb 9px, #f4f7fb 18px); }
+.panel-state--error { background: #fff8f8; }
+.panel-state__loading { display: flex; align-items: center; gap: 8px; font-size: var(--font-size-md); }
+.loading-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); animation: pulse 1.2s infinite ease-in-out; }
+.panel-state__icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #f0f4f9; color: #8a98ab; font-weight: 800; }
+.panel-state--error .panel-state__icon { background: #fff0f0; color: #d75a5a; }
+.panel-state__title { color: #5e6e83; font-size: var(--font-size-lg); font-weight: 700; }
+.panel-state__detail { max-width: 460px; color: #96a2b1; font-size: var(--font-size-sm); line-height: 1.45; }
+@keyframes pulse { 0%, 100% { transform: scale(.8); opacity: .5; } 50% { transform: scale(1.2); opacity: 1; } }
+
+
+/* ==========================================================================
+   Top10 排名列表（Batch C1）
+   由「固定 10 轨道 + 1fr 撑满容器」改为「固定窗口 + 内部滚动」。
+   实测的两个缺陷：
+     · grid-template-rows: repeat(10, minmax(0,1fr))
+       → 行高完全由容器高度决定，实测 14.8px ~ 35px，摆动 2.4 倍
+     · 行数 < 10 时仍保留空轨道 → 底部空洞 28.1px（容器 244.4，9 行+8gap 仅占 216.3）
+   改为 flex 后：行高由 --rank-row-h 固定，行数由数据决定，超出部分滚动。
+   契约：适配器强制 rank 从 1 连续、items.length ≤ 10 ⇒ 1 行与 10 行都必须正确。
+
+   面板高度预算（chrome 为实测值，不是推算）：
+     header 40 + body padding(1+5) = 46；list padding-bottom 4
+     面板高度 = 行数 × rowH + (行数−1) × gap + 4 + 46
+   ========================================================================== */
+.ranking-list {
+  --rank-row-h: 26px;   /* 设计空间 px —— Scale 下由浏览器整体缩放，不用 vh/cqh */
+  --rank-gap: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rank-gap);
+  height: auto;         /* 必须 auto：否则容器仍取父级高度，空洞只是换了位置 */
+  min-height: 0;
+  padding: 0 5px 4px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.ranking-list::-webkit-scrollbar { width: 8px; }
+.ranking-list::-webkit-scrollbar-track { background: transparent; }
+.ranking-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+.ranking-row {
+  /* flex-basis:auto + min-height：内容永远小于行高时结果恒等于 --rank-row-h；
+     若将来字号变大则行高随之增长而不是让内容溢出压住下一行。 */
+  flex: 0 0 auto;
+  min-height: var(--rank-row-h);
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr) 62px 88px 76px;
+  /* 由 minmax(17px, 1fr) 改为 minmax(0, 1fr)：行高固定后 17px 的最小值会把轨道顶出盒子 */
+  grid-template-rows: minmax(0, 1fr) 2px;
+  column-gap: var(--sp-2);
+  align-items: center;
+  padding: 0;
+}
+.ranking-index {
+  grid-row: 1;
+  flex: none;
+  width: 18px;
+  height: 16px;
+  border-radius: var(--radius-deco);
+  display: grid;
+  place-items: center;
+  background: #eef2f7;
+  color: #8190a4;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+.ranking-index.top { background: linear-gradient(135deg, #f5b64e, #ed8b3b); color: #fff; }
+.ranking-station,
+.ranking-orders,
+.ranking-energy,
+.ranking-fee {
+  grid-row: 1;
+  min-width: 0;
+  white-space: nowrap;
+  line-height: 1;
+}
+.ranking-station {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #52637a;
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+.ranking-orders { color: #8794a6; font-size: var(--font-size-xs); text-align: right; }
+.ranking-energy { color: #8794a6; font-size: var(--font-size-xs); text-align: right; }
+.ranking-fee { color: #b97520; font-size: var(--font-size-sm); font-weight: 700; text-align: right; }
+.ranking-track {
+  grid-column: 2 / 6;
+  grid-row: 2;
+  height: 2px;
+  border-radius: 999px;
+  background: #edf1f6;
+  overflow: hidden;
+}
+.ranking-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #f7c369, #f0a13a); }
+
+/* ---------- Top10 模式差异（Batch C1） ----------
+   scale / columns 是「不滚动」档（高度由视口给定）→ 用 max-height 封顶列表，
+   省下的高度因为右栏该行已改为 auto，会自动让给下面的 Trend。
+   stack / reflow 是「整页滚动」档 → 不设 max-height，由内容驱动 + min-height 兜底，
+   否则会出现「页面滚动 + 列表滚动」双层滚动，手机上体验很差。 */
+.dashboard-viewport[data-layout='scale'] .ranking-list {
+  --rank-row-h: 26px;
+  /* 5 行满(130) + 4 gap(12) = 142，再放 16px → 露出第 6 行的一部分，滚动可感知 */
+  max-height: 158px;
+  overflow-y: auto;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .ranking-list {
+  --rank-row-h: 28px;
+  /* 6 行满(168) + 5 gap(15) = 183，再放 14px → 露出第 7 行的一部分 */
+  max-height: 197px;
+  overflow-y: auto;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .ranking-list {
+  --rank-row-h: 30px;
+  max-height: none;
+  overflow-y: visible;
+}
+.dashboard-viewport[data-layout='reflow'] .ranking-list {
+  --rank-row-h: 36px;   /* 两行版行高 */
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* Reflow 两行版：390px 下「[1] 站名 334单 2098.4kWh ¥328.60」单行装不下
+   （实测单行只给站名留 62px，会被截成 5 个字）。改为两行，字段一个不少：
+     [1] 科学大道充电站
+         334单  2,098.4 kWh  ¥328.60  */
+.dashboard-viewport[data-layout='reflow'] .ranking-row {
+  grid-template-columns: 22px 52px 88px minmax(0, 1fr);
+  grid-template-rows: auto auto 2px;
+  row-gap: 3px;
+}
+.dashboard-viewport[data-layout='reflow'] .ranking-index   { grid-row: 1 / 3; grid-column: 1; align-self: center; }
+.dashboard-viewport[data-layout='reflow'] .ranking-station { grid-row: 1; grid-column: 2 / -1; line-height: 1.15; }
+.dashboard-viewport[data-layout='reflow'] .ranking-orders  { grid-row: 2; grid-column: 2; text-align: left; line-height: 1.15; }
+.dashboard-viewport[data-layout='reflow'] .ranking-energy  { grid-row: 2; grid-column: 3; text-align: left; line-height: 1.15; }
+.dashboard-viewport[data-layout='reflow'] .ranking-fee     { grid-row: 2; grid-column: 4; text-align: left; line-height: 1.15; }
+.dashboard-viewport[data-layout='reflow'] .ranking-track   { grid-row: 3; grid-column: 2 / -1; }
+
+/* ── 充电过程状态概览（Batch C2 重构） ──
+   用户反馈：「四个框大了，里面的字都太小太小了」。实测完全证实，而且比表述更极端 ——
+   卡片被 grid 的 `flex:1` 拉伸，高度在 46 ~ 167px 之间摆动（3.6 倍），字却始终 10 / 13.5px：
+     1920×1080  卡片 140×106   label 10px  value 13.5px
+     1715×1401  卡片 126×160   ← 更高，字一样小
+     1024×768   卡片 114× 87
+     390×844    卡片  83×167   ← 最极端：167px 高的框里放两行小字
+   这与 Top10 的行高漂移是同一类病：**让容器吃掉剩余高度，信息密度反被稀释**。
+   改法两条 —— ① 容器不再参与拉伸（`flex:0 0 auto` + 固定 `min-height`）
+               ② 字号按模式分档放大，且**必须允许换行**。
+
+   字号上限不是审美选择，而是宽度约束：
+     「平均峰值温度」= 6 个汉字，按 N px 需要 6N px。
+     最窄的四等分卡片内容宽只有约 70px（1024×1366 的 columns 档），
+     所以 label 只能到 13~14px（6×14 = 84 > 70，此时靠换行消化），
+     而「至少放大 2 倍」（10 → 20px）在四等分下需要 120px，物理上放不下。
+     真正能大幅放大的是 value 与 unit 的视觉层级差（见下）。 */
+.process-summary {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;   /* 指标网格在面板内垂直居中 → 上下留白 */
+  /* Batch C.6：padding-top 由 0 改为 6px。
+     原因是净空严重**上紧下松**：实测改前为「上 1px / 下 8px」——
+     .panel-body 自身的 padding 就是 1px（上）/5px（下），再叠 summary 的 0/2，
+     上侧几乎贴住标题。取 6px 后实测「上 9 / 下 10」，基本对称。
+     该值不是凑出来的：要让上下相等需 summaryPadTop − summaryPadBottom
+     = bodyPadBottom − bodyPadTop = 5 − 1 = 4，取 6/2 即满足。 */
+  padding: 6px 2px 2px;
+}
+/* Batch C.5：原先这里还有 .process-summary__scope（过程记录/会话条数）
+   与 .process-note（负电流保留方向…）两条说明。它们属于数据字典语言，
+   占视觉空间但不承担运营信息，已连同模板一起删除，规则不再保留以免留死代码。 */
+.process-grid {
+  flex: 0 0 auto;            /* 关键：不再吃掉剩余高度（原为 flex:1，是卡片虚高的根因） */
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.process-metric {
+  --pm-label: 14px;
+  --pm-value: 24px;
+  --pm-unit: 12px;
+  min-width: 0;
+  min-height: 68px;          /* 原实测 106 ~ 167px → 68px（约 0.4~0.64 倍） */
+  border: 1px solid #edf1f6;
+  background: #f9fbfd;
+  border-radius: var(--radius-card);
+  padding: 4px 4px 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+}
+/* label：允许换行 —— 窄容器下「平均峰值温度」自然折成两行，
+   而不是像原来那样用 nowrap 把 6 个字挤在一行（原来之所以没溢出，是因为卡片被拉得足够宽） */
+.process-metric span { color: #8794a6; font-size: var(--pm-label); line-height: 1.15; max-width: 100%; }
+/* value：成为主视觉。字号约为 label 的 1.7 倍，并压紧字距，避免大字号显得松散。
+   Batch C.5 —— 「数字几何居中 + 单位独立靠右」的机制：
+     strong 占满卡片内容宽 + text-align:center ⇒ **数字本身居中**（不是「数字+单位」整体居中）；
+     strong 同时设为 position:relative，于是它成为 small 的定位基准 ——
+     单位因此落在「数字那一行」的右侧，而不是卡片的底部。
+   ⚠️ 两个必须成对写的点，改任一个都会坏：
+     · small 若以卡片为基准（strong 不加 relative），bottom:0 会把单位甩到卡片底部、压在色条上；
+     · strong 内若有空白文本节点（例如 `}} <small>`），尾随空格会被一起居中，造成约 3px 偏移，
+       所以模板里 `}}` 后必须紧接 `<small>`。 */
+.process-metric strong { display: block; width: 100%; text-align: center; position: relative; margin-top: 1px; color: #34475f; font-size: var(--pm-value); font-weight: 700; line-height: 1.02; letter-spacing: -.4px; white-space: nowrap; }
+.process-metric strong small { position: absolute; right: 0; bottom: 0; margin-left: 0; color: #8493a7; font-size: var(--pm-unit); font-weight: 500; letter-spacing: 0; }
+.process-metric i { position: absolute; height: 3px; left: 6px; right: 6px; bottom: 4px; background: var(--blue); border-radius: var(--radius-deco); opacity: .8; }
+.process-metric.average_current i { background: var(--purple); }
+.process-metric.average_voltage i { background: var(--teal); }
+.process-metric.average_max_temperature i { background: var(--orange); }
+
+/* Process 指标字号分三档（不用 vw / cqh —— scale 模式下两者都会给出错误密度，
+   这一点在 Batch C1 的行高方案里已经确定）。基准档（scale）的值写在上面的 .process-metric 里。 */
+.dashboard-viewport[data-layout='compact'] .process-metric {
+  --pm-label: 13px;   /* 四等分卡片内容宽最窄约 70px（1024×1366），6 个汉字需要换行才能放下 */
+  --pm-value: 22px;
+  --pm-unit: 12px;
+}
+.dashboard-viewport[data-layout='reflow'] .process-metric {
+  --pm-label: 13px;
+  --pm-value: 22px;
+  --pm-unit: 11px;
+}
+/* Reflow：390px 下四等分每格内容宽只有约 78px，放不下放大后的字号（见 CSS 顶部注释），
+   改 2×2 把每格提到约 166px。代价是高度 +74px，而 reflow 本就是长页面。 */
+.dashboard-viewport[data-layout='reflow'] .process-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Batch C.5：.process-note（负电流保留方向…）规则已随模板删除。
+   它是数据字典语言，不承担运营信息；同时它与「电流取绝对值显示」的决定冲突。 */
+
+/* ── 运营建议（Batch C2） ──
+   用户反馈「大框和其中的字可以稍微放大」，同时它承担 Process 释放出的高度。
+   ⚠️ 放大字号**必须同时解除 nowrap**：实测在放大之前，8 档视口里已经有 6 档在截断正文 ——
+      「需求分布」48 字按 9.7px 需要 461px，而可用宽只有 310~445px：
+        1600×1200 445<461 ✗   1280×1024 341<461 ✗   1024×768 433<461 ✗
+        900×600   371<461 ✗   390×844   310<461 ✗   （1920/1715/768 才完整）
+      只放大字号而不解除 nowrap，截断只会更严重。 */
+.insights-panel .panel-body { padding: 0; }
+.insight-list {
+  height: 100%;
+  padding: 0 10px 6px;
+  display: grid;
+  grid-template-rows: repeat(2, auto);   /* 卡片按内容高度 —— 不再被拉伸成空壳 */
+  /* Batch C.5：center → start。
+     center 会把「面板高于内容」的那部分留白上下均分，于是在**副标题和首卡之间**
+     挤出一道视觉断层（实测 1920 下 29.5px、1715 下 51px）。
+     改 start 后间距恒等于 panel-header 的 padding-bottom（4px），
+     多余留白全部落到面板底部 —— 那是「面板内部余量」，不是「标题与内容的断层」，
+     是两个完全不同的问题。 */
+  align-content: start;
+  gap: 8px;
+}
+.insight-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; background: #f5f8fe; border-radius: var(--radius-card); border-left: 3px solid #6e96e9; min-height: 0; overflow: hidden; }
+.insight-item--warning { background: #fff8ed; border-left-color: #efa747; }
+.insight-item__index { flex: 0 0 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #e2eafa; color: #5579c6; font-size: var(--font-size-sm); font-weight: 800; }
+.insight-item--warning .insight-item__index { background: #ffebca; color: #b87925; }
+.insight-item__body { min-width: 0; flex: 1; }
+.insight-item strong { display: block; color: #52627a; font-size: var(--font-size-lg); line-height: 1.15; }
+/* 解除 nowrap + ellipsis：正文允许换行，使「字号放大」不会以牺牲信息为代价 */
+.insight-item p { margin: 3px 0 0; color: #7e8b9d; font-size: var(--font-size-md); line-height: 1.5; }
+
+.dashboard-global-warning { position: fixed; left: 16px; bottom: 10px; z-index: 20; max-width: 600px; padding: 9px 12px; border-radius: var(--radius-card); background: rgba(255, 244, 223, .97); color: #a56e15; font-size: var(--font-size-xs); box-shadow: var(--shadow); }
+
+.kpi-strip__notices {
+  position: absolute;
+  top: 6px;
+  right: 9px;
+  z-index: 3;
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  pointer-events: none;
+}
+/* Batch D-5：登记 —— .kpi-strip__notice（11px）是 KPI 条内的提示文本，
+   属 badge 体系**之外**的特殊尺寸，本轮不随 badge 统一（改它会加宽 KPI 条内提示）。
+   若日后纳入，需与 .status-chip 的 24px 契约对齐并复测 KPI 条高度。 */
+.kpi-strip__notice {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff4e5;
+  color: #b97b27;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Compact：横向挤不下三列时的退化布局。按「纵向是否有富余」分两档：
+     tier='stack'   （矮窗，如 1024×768 / 900×600）：
+                    中心组全宽置顶 + 左右两列 50/50 并排。
+     tier='columns' （高窗，如 1715×1401 / 1600×1200）：
+                    纵向有富余，保留「中｜左｜右」三列原始结构，
+                    否则中心组被拉成全宽横条，图宽高比飙升到 ~4.9:1。
+   注意：grid 容器的 display 由各 tier 规则分别给定（stack=flex，columns=grid），
+   此处不设 display，避免与 tier 规则互相覆盖产生不确定的顺序依赖。
+   ========================================================================== */
+.dashboard-viewport[data-layout='compact'] .dashboard-grid {
+  gap: 10px;
+  min-height: 0;
+}
+
+/* ── tier='stack'：堆叠形态（Batch B 原形态，回归已验证） ── */
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+/* Batch C2：中心列行下界由 minmax(320px,1fr) / minmax(280px,1fr) 提到 420 / 400。
+   原因：stack 档中心列是**整行全宽**（1024×768 下 996px，1280×1024 下 1252px），
+   而原来只有 ~610px 高 ⇒ 两张中心图的比例是 3.79 / 3.68（1024×768）
+   乃至 4.78 / 4.64（1280×1024），全部越过 B.1 的 3.6 门禁。
+   这与「窄容器把图压扁」是同一类问题，只是这次是「宽容器 + 矮容器」。
+   提到 420/400 后中心列 ~830px：996 宽 → 2.43:1，1252 宽 → 3.49:1，均回到门禁内。
+   代价是 stack 档页面变长约 220px —— 该档本就是长滚动页面，可接受。 */
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--center {
+  flex: 0 0 100%;
+  order: 1;
+  display: grid;
+  grid-template-rows: minmax(420px, 1fr) minmax(400px, 1fr);
+  gap: 10px;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--left,
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right {
+  flex: 1 1 calc(50% - 5px);
+  order: 2;
+  gap: 10px;
+}
+/* Compact 下中心组置顶后不再需要固定行高分配 */
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--left {
+  grid-template-rows: repeat(3, minmax(200px, 1fr));
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right {
+  /* 第 1 行由 minmax(300px,1.2fr) 改为 auto（Batch C1）：Top10 不参与空间分配。
+     实测该档只剩 300px，而 10 行 × 30px 需要 377px（chrome 46 + 列表 331），
+     原写法会被 overflow:hidden 静默裁掉 77px。
+
+     Batch C2：第 2~4 行**放弃 fr，改为全 auto + 各面板显式下界**。
+     原因：stack 档右列的高度本身就由右列自己的最小高度决定（flex 行高 = max(左, 右)），
+     是一个自指结构 —— 用 fr 时「释放出来的高度」会通过行高反过来改变总量，
+     导致 fr 几乎恒等于下界，比例完全不起作用（实测 900×600 / 1024×768 两档都是如此）。
+     改成显式下界后总高确定：380 + 190 + 165 + 200 + 3×10 = 965px，左列按此拉伸。 */
+  grid-template-rows: auto auto auto auto;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right > :nth-child(2) {
+  height: 190px;   /* FeeEnergyTrend：原 ~200px */
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right > :nth-child(3) {
+  min-height: 140px;   /* ProcessStatusOverview：Batch C.6 由 130 提到 140（+8%），
+                          给四个指标卡补一点上下呼吸空间。
+                          下限 136~140 是刻意区间：再低会回到「贴住标题」的观感，
+                          再高（>150）四个指标卡会重新变成虚高的空壳。 */
+}
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right > :nth-child(4) {
+  min-height: 200px;   /* OperationInsights：两条建议各两行的内容下界（原 ~160px） */
+}
+/* 显式下界：列向 flex 容器在 auto 高度下的 intrinsic sizing 各引擎实现有差异
+   （Batch B 的 R2 就是同类问题），用 min-height 兜住，内容再多也不会被裁。
+   377px 需求 + 3 余量。代价：本档右列最小高 830 → 910px，页面变长 80px ——
+   compact 本就允许纵向滚动，无功能副作用。 */
+.dashboard-viewport[data-layout='compact'][data-tier='stack'] .dashboard-column--right > :nth-child(1) {
+  min-height: 380px;
+}
+
+/* ── tier='columns'：纵向有富余，保留三列原始结构 ──
+   高度由 .dashboard-page 的 minmax(0, 1fr) 提供（见下方 page 规则），
+   三列等高拉伸，图表回到 ~16:9 的正常宽高比。 */
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 4.4fr) minmax(0, 7.2fr) minmax(0, 5.6fr);
+  align-items: stretch;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-column {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-column--left {
+  /* Batch D-3：由三等分改为「两小一大」，使左列分界与中右列对齐（形成 2 行 × 3 列）。
+     ChatGPT5.6 复核建议先取温和的 .85（雷达 +71px 而非 +79），实测后不足再向 .75 收。 */
+  grid-template-rows: minmax(0, .85fr) minmax(0, .85fr) minmax(0, 1fr);
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-column--center {
+  /* Batch D-3：1.08 → 1.47，使中列分界（上行 + gap）与右列分界（Top10 + Trend + 2gap）对齐。
+     实测 1715/1600 两档该比例一致（≈1.47），1280×1024 约 1.40 —— 取 1.47 误差 ≤3px。 */
+  grid-template-rows: minmax(0, 1.47fr) minmax(0, 1fr);
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-column--right {
+  /* 第 1 行 minmax(0,1.5fr) → auto（Batch C1）：Top10 由列表 max-height:197px 封顶。
+     第 2~4 行 Batch C2 重定：
+       Trend minmax(150px, .8fr) —— 让出约 10%（实测 1715×1401：325 → 289）。
+             留 150px 下界，否则最矮的 columns 档会溢出
+       Process minmax(155px, auto) —— 内容驱动（内容实测 161px）
+       Insights minmax(140px, 1fr) —— **C2.1 通过调 fr 比例限幅**
+
+     ★ 高窗 Insights 过度膨胀的修法（C2.1）：
+       原先 Trend : Insights = .8 : 1，Insights 在 1715×1401 拿到 361px，
+       而两条建议内容实需仅 ≈198px ⇒ 约 163px 空白，越过「稍微放大」成为浪费。
+       **改 fr 比例**（fr 轨道在 minmax 下按 `假想 fr × 因子` 分配，只要结果不低于下界，
+       就是「可用空间按因子等比例切分」，与下界无关）：
+       取 1.15 : 1，即 Insights 占 46.5%，Trend 占 53.5%：
+
+         | 视口 | 可用(去 Top10/Process) | Trend | Insights | Insights 内容实需 208 |
+         |---|---|---|---|---|
+         | 1715×1401 | 650 | 289 → **348** | 361 → **302** |
+         | 1600×1200 | 454 | 201 → **242** | 252 → **211**（余量 3px）|
+         | 1280×1024 | 290 | 150（下界）| 140（下界）| 富余为 0，两格都停在下界 |
+
+       ⚠️ 这个尺寸族**无解**，只能取折中，1.15 是「1600 不裁切」允许的最大值：
+          设 Trend 因子 a、Insights 因子 1，Insights 占比 = 1/(a+1)。
+          · 1600×1200 要求 Insights ≥ 内容实需 208px（实测 211 时余量只剩 3px）
+            ⇒ 454/(a+1) ≥ 208 ⇒ **a ≤ 1.18**
+          · 1715×1401 希望 Insights ≤ 280px
+            ⇒ 650/(a+1) ≤ 280 ⇒ **a ≥ 1.32**
+          1.18 与 1.32 无交集 ⇒ 二者不能同时满足。取 a = 1.15（1600 侧生效），
+          1715 落在 Insights 302 / Trend 348。
+          **若更看重 1715 目标（Insights ≤280），把 1.15 改成 1.32 即可，
+            代价是 1600×1200 的 Insights 比内容实需短约 2px（亚像素，基本不可见）。**
+       只动 columns 一档：不碰 scale / stack / reflow，也不碰任何模式判定。
+
+     ⚠️ 两次失败的写法，勿再试（都是同一机理）：
+       · `minmax(140px, 270px)` —— 固定 max 的轨道不再吸收剩余空间，
+         余量被两个 `auto` 轨道（Top10 / Process）吸走：实测 1715×1401
+         Top10 245→283、Process 161→199（正是要求「不动」的两个），
+         1600×1200 的 Trend 绘图区被压到 403×46（8.76:1），1280×1024 的 Top10 塌到 120。
+       · `minmax(140px, auto)` —— 只剩一个 fr 轨道时 `auto` 轨道同样失稳：
+         Top10 245→274、Process 161→191，1280×1024 的 Top10 甚至塌到 169。
+       规律：**这套布局里必须有 ≥2 个 fr 轨道，`auto` 轨道才会稳定停在内容高度。**
+       要限幅，改 fr 比例；不要改 max。 */
+  grid-template-rows:
+    auto
+    minmax(150px, 1.38fr)
+    minmax(140px, .52fr)
+    minmax(140px, 1fr);
+}
+/* 高窗 + 三列时，页面回到「撑满视口、内部不滚动」的桌面语义。
+   必须同时给 viewport 一个**确定高度**，否则 .dashboard-page 的
+   height:100% 会解析到 auto（父级只有 min-height），回退为内容高度 ——
+   这正是 1600×1200 下 page 被撑到 1450px、纵向溢出 250px 的成因。 */
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] {
+  height: 100vh;
+  min-height: 0;
+  overflow-y: hidden;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-canvas {
+  height: 100%;
+}
+.dashboard-viewport[data-layout='compact'][data-tier='columns'] .dashboard-page {
+  height: 100%;
+  grid-template-rows: 68px auto minmax(0, 1fr);
+  padding: 12px 14px 8px;
+  gap: 9px;
+  min-height: 720px;
+  overflow: hidden;
+}
+
+/* Compact 的 KPI：3 + 2 */
+.dashboard-viewport[data-layout='compact'] .kpi-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 104px;
+}
+
+/* ==========================================================================
+   Reflow：单列纵向排列
+   保持「中 → 左 → 右」三组结构（用户要求「三个大块改为上下排列」），
+   组内顺序本轮维持桌面顺序，若需按重要性调整留待 Batch C。
+   ========================================================================== */
+.dashboard-viewport[data-layout='reflow'] .dashboard-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--center { order: 1; }
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--left   { order: 2; }
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--right  { order: 3; }
+
+.dashboard-viewport[data-layout='reflow'] .dashboard-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* 关键：flex 子项必须显式高度。height:100% 在无高度约束的 flex 列中会塌缩为 0，
+   ECharts 直接渲染空白（风险 R2）。各档位按图表空间需求分档，注释标明对应组件，
+   注意本方案以此处耦合 DOM 顺序为代价，换取了「不改任何图表组件」的边界。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column > * {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+/* 中心组 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--center > :nth-child(1) { height: 360px; } /* LoadForecastChart */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--center > :nth-child(2) { height: 400px; } /* StationHourHeatmap */
+/* 左组：PlatformDonut / ChargeDurationChart / WeekdayWeekendRadar —— 三者体量接近，统一档位 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--left > * { height: 300px; }
+/* 右组 */
+/* Reflow 下 StationRanking 改为「内容驱动 + min-height」。
+   两行版 10 行需 10×36 + 9×3 + 4 = 387 列表 + 46 chrome = 433px，
+   旧值 420px 会裁掉 13px。用 min-height 而不是继续猜一个固定 height：
+   需求与旧值只差 13px，字体/border/box-sizing/滚动条任一项都足以吃掉这点余量，
+   而这类静默裁切截图和断言都不易发现（B.1 的 250px 纵向溢出就是这么漏过去的）。
+   reflow 本就是长页面，多给 27px 的纵向成本近似为零。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--right > :nth-child(1) {
+  height: auto;
+  min-height: 460px;
+} /* StationRanking：10 行两行版自然展开，不内部滚动 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--right > :nth-child(2) { height: 290px; } /* FeeEnergyTrend：-9.4%（原 320） */
+/* Batch C2：Process 在 reflow 改为 **2×2**。390px 宽下四等分每格只有 78px 内容宽，
+   而「平均峰值温度」6 个汉字按 14px 需要 84px —— 四等分在手机上根本放不下放大后的字号。
+   2×2 把每格内容宽提到 ~166px，才谈得上「字号至少放大 2 倍」。
+   代价是高度增加约 74px（两行卡片），而 reflow 本就是长页面。
+   面板高度改为内容驱动 + min-height 下界（内容实测 ~227px）。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--right > :nth-child(3) {
+  height: auto;
+  min-height: 200px;   /* Batch C.6：195 → 200（+2.6%）。移动端纵向滚动成本高，
+                          因此只加「非常小」的一点，与桌面 +8% 刻意区别对待。 */
+} /* ProcessStatusOverview */
+/* Batch C2：运营建议放大正文后，390px 下「需求分布」48 字在 13px 需要 3 行，
+   两条建议内容约 190px + 面板头 40 ⇒ 下界取 280px（留换行余量，不是刚好卡住）。
+   注：reflow 因为 Process 改 2×2 多占 74px，四条面板的总高比原先长，但页面本就滚动。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-column--right > :nth-child(4) {
+  height: auto;
+  min-height: 280px;
+} /* OperationInsights */
+
+/* Compact 的 Header：仍为单行，但收紧间距避免各项挤压换行 */
+.dashboard-viewport[data-layout='compact'] .dashboard-header { padding: 0 12px; }
+.dashboard-viewport[data-layout='compact'] .dashboard-brand { min-width: 300px; gap: var(--sp-2); }
+.dashboard-viewport[data-layout='compact'] .dashboard-brand h1 { font-size: 22px; }
+.dashboard-viewport[data-layout='compact'] .dashboard-brand p { font-size: var(--font-size-xs); letter-spacing: 1.6px; }
+.dashboard-viewport[data-layout='compact'] .dashboard-brand__mark { width: 40px; height: 40px; flex: 0 0 40px; }
+.dashboard-viewport[data-layout='compact'] .header-meta { gap: 8px; }
+.dashboard-viewport[data-layout='compact'] .header-meta__item { padding-left: 8px; }
+.dashboard-viewport[data-layout='compact'] .header-meta__item span { font-size: var(--font-size-xs); }
+.dashboard-viewport[data-layout='compact'] .header-meta__item strong { font-size: var(--font-size-sm); }
+.dashboard-viewport[data-layout='compact'] .header-meta__wide { min-width: 128px; }
+.dashboard-viewport[data-layout='compact'] .dashboard-page {
+  grid-template-rows: 68px auto minmax(0, 1fr);
+}
+
+/* Reflow 的 Header：76px 固定行高在窄屏会裁切内容，改为纵向堆叠 + 自适应高度。
+   布局行定义在下方 .dashboard-page 的 grid-template-rows 覆盖里。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.dashboard-viewport[data-layout='reflow'] .dashboard-brand {
+  min-width: 0;
+  width: 100%;
+}
+.dashboard-viewport[data-layout='reflow'] .dashboard-brand h1 { font-size: 19px; letter-spacing: .2px; }
+.dashboard-viewport[data-layout='reflow'] .dashboard-brand p { font-size: 10px; letter-spacing: 1.4px; }
+.dashboard-viewport[data-layout='reflow'] .dashboard-brand__mark { width: 36px; height: 36px; flex: 0 0 36px; }
+.dashboard-viewport[data-layout='reflow'] .header-meta {
+  margin-left: 0;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px 10px;
+}
+.dashboard-viewport[data-layout='reflow'] .header-meta__item {
+  padding-left: 0;
+  border-left: 0;
+}
+.dashboard-viewport[data-layout='reflow'] .header-meta__item span { font-size: 10px; }
+.dashboard-viewport[data-layout='reflow'] .header-meta__item strong { font-size: var(--font-size-sm); }
+.dashboard-viewport[data-layout='reflow'] .header-meta__wide { min-width: 0; }
+.dashboard-viewport[data-layout='reflow'] .quality-badge,
+.dashboard-viewport[data-layout='reflow'] .mock-badge,
+.dashboard-viewport[data-layout='reflow'] .demo-badge,
+.dashboard-viewport[data-layout='reflow'] .stale-badge { font-size: 10px; padding: 4px 8px; }
+.dashboard-viewport[data-layout='reflow'] .refresh-button { font-size: var(--font-size-sm); padding: 7px 10px; }
+
+/* Reflow 的 .dashboard-page：三行改为「自适应 header + 自适应 KPI + 内容」，
+   不再用固定像素行高（否则窄屏必然裁切）。 */
+.dashboard-viewport[data-layout='reflow'] .dashboard-page {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 10px 10px 14px;
+  gap: 10px;
+}
+
+/* Reflow 的 KPI：2 + 2 + 1（第 5 个横跨整行） */
+.dashboard-viewport[data-layout='reflow'] .kpi-strip {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.dashboard-viewport[data-layout='reflow'] .kpi-strip > :nth-child(5) {
+  grid-column: 1 / -1;
+}
+
+/* ── Batch D-2：Donut 中心 KPI 改为 HTML 覆盖层 ──
+   中心文字原先用 ECharts graphic（百分比 top 32%/42% + 绝对字号 11/21px），
+   块中心相对环心的偏移 = −0.06H + 10.5，随图表高度线性漂移（1715×1401 实测 −7.6px）。
+   改为 DOM 覆盖层后，transform 按元素自身高度折算 ⇒ 恒居中。
+   top 由组件内 CENTER.y 提供，与 ECharts option 的 series.center 共用同一常量。 */
+.donut-wrapper { position: relative; width: 100%; height: 100%; min-height: 0; }
+.donut-center {
+  position: absolute;
+  left: 50%;
+  /* ── 两个量职责分离，不要合并 ──
+     top（由组件 CENTER.y 提供）= **圆环的几何中心**，43% 是为 bottom:0 的图例让位。
+     --donut-optical-y = **UI 文字的视觉补偿**：中心块变高后（26+13+gap ≈ 43px），
+     人眼会觉得重心偏上，故整体下移一点。它**不是**定位错误，不要把补偿量写进 CENTER.y，
+     否则环形图本身会跟着移动、图例距离也会变。
+     写成自定义属性是为了让诊断能读出该值（getComputedStyle 可解析），保持单一真源。 */
+  --donut-optical-y: 4px;
+  transform: translate(-50%, calc(-50% + var(--donut-optical-y)));
+  pointer-events: none;      /* 不挡扇区 hover 与 tooltip */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Step3：2 → 4px。两行贴太紧会读成「一个整体标签」而不是
+     「核心指标 + 指标名称」；超过 6px 又会显得分离，故取 4。 */
+  gap: 4px;
+}
+/* Step2：层级调整 —— 数字 21→24（+14%，承担 KPI 主视觉）、标签 11→12，
+   顺序改为「数字在上」，并加 tabular-nums 让数据刷新时数字宽度稳定。
+   Step3：字号再各加一号（24→26 / 12→13），并拉开主次色 ——
+   数字 #1F2937（主信息）/ 标签 #64748B（解释），靠色阶而非同色差形成层级。
+   字号幅度经内圆约束校验：最紧档内半径 51px（1280×1024），
+   26px 的「3,395」宽约 72px、块高约 48px，外接半径约 43px < 51 ✓。
+   不做长数字动态字号：7 位以内均安全；9 位才会超界，届时再降一档。 */
+.donut-center__label { color: #64748b; font-size: var(--font-size-md); font-weight: 500; line-height: 1.2; }
+.donut-center__value { color: #1f2937; font-size: 26px; font-weight: 700; letter-spacing: -.4px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+
+/* ── Batch D-4：页脚（视觉终止层）──
+   职责只有「收尾」，不是信息模块：品牌名与数据更新时间已在 DashboardHeader，
+   这里刻意不重复（与 C3 清理「图例重复环外百分比」同一原则）。
+   也不加背景 / 边框 / 图标 —— 页面已有三层卡片，页脚必须是弱存在感（视觉权重 ★）。
+   高度 32px 参与页面网格（76 + 104 + 1fr + 32 + 4×gap9 + padding 12/8 = 100vh），
+   **该值参与视口预算**：加大它会等量压缩内容区，进而影响 Trend 绘图区 —— 有断言钉住。 */
+.dashboard-footer {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8a99ad;
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+.dashboard-footer__line { margin: 0; }

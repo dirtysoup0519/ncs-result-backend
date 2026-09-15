@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.log
+.chk-*
+.commit-msg.txt
+.commit-result.txt
+.build-out.txt
+.shots-out.txt
+.dev-out.txt
+.shots/
+
+# 仓库重建时保留的受损 .git（不进版本库）
+.git-damaged-*/
