@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ncs_backend.admin.ads_schema import initialize_ads_result_schema
+from ncs_backend.admin.prediction_schema import initialize_prediction_schema
 
 
 def main(argv=None) -> int:
@@ -17,9 +18,10 @@ def main(argv=None) -> int:
     connection = sqlite3.connect(args.sqlite)
     try:
         result = initialize_ads_result_schema(connection)
+        prediction = initialize_prediction_schema(connection)
     finally:
         connection.close()
-    print(json.dumps({"initialized": result.applied, "database": str(args.sqlite), "tables": list(result.tables), "views": list(result.views)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"initialized": result.applied, "predictionInitialized": prediction.applied, "database": str(args.sqlite), "tables": list(result.tables) + list(prediction.tables), "views": list(result.views) + list(prediction.views)}, ensure_ascii=False, indent=2))
     return 0
 
 

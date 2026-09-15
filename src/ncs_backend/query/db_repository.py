@@ -8,8 +8,8 @@ is allowed to see published views only.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from ncs_backend.query.repository import EmptyDashboardRepository, QueryPayload
@@ -181,7 +181,10 @@ class DbApiDashboardRepository:
                 "displayName": row.get("display_name"),
                 "orderCount": _integer(row.get("order_count")),
                 "totalFees": _decimal_text(row.get("total_fees")),
-                "orderRatio": _decimal_text(row.get("order_ratio")) if row.get("order_ratio") is not None else _ratio_text(row.get("order_count"), total),
+                # The upstream ratio is a percentage rounded to two decimal
+                # places before import.  Recompute it from the reconciled
+                # counts so the API ratio remains internally consistent.
+                "orderRatio": _ratio_text(row.get("order_count"), total),
             }
             for row in rows
         ]
@@ -199,6 +202,7 @@ class DbApiDashboardRepository:
             """,
             values,
         )
+        total = sum(_integer(row.get("order_count")) for row in rows)
         items = [
             {
                 "bucketCode": _duration_bucket_code(row.get("bucket_code"), row.get("label")),
@@ -206,7 +210,7 @@ class DbApiDashboardRepository:
                 "lowerMinutes": _integer(row.get("lower_minutes")),
                 "upperMinutes": _integer(row.get("upper_minutes")) if row.get("upper_minutes") is not None else None,
                 "orderCount": _integer(row.get("order_count")),
-                "ratio": _decimal_text(row.get("ratio")),
+                "ratio": _ratio_text(row.get("order_count"), total),
             }
             for row in rows
         ]
@@ -428,14 +432,17 @@ class DbApiDashboardRepository:
         actual = []
         forecast = []
         cutoff = params.get("cutoffHour")
+        requested_date = _date_value(params.get("date"))
         for row in rows:
-            target_time = _datetime_value(row.get("target_time"))
+            target_time = _business_datetime_value(row.get("target_time"))
+            if target_time is None or target_time.date() != requested_date:
+                continue
             if row.get("series_type") == "ACTUAL":
-                if target_time is not None and target_time.hour >= cutoff:
+                if target_time.hour >= cutoff:
                     continue
                 actual.append(
                     {
-                        "time": _datetime_text(target_time),
+                        "hour": target_time.hour,
                         "orderCount": _integer(row.get("order_count")),
                         "chargingEnergy": _decimal_text(row.get("charging_energy")),
                         "isObserved": True,
@@ -444,19 +451,20 @@ class DbApiDashboardRepository:
             else:
                 forecast.append(
                     {
-                        "time": _datetime_text(target_time),
-                        "chargingEnergy": _decimal_text(row.get("charging_energy")),
+                        "hour": target_time.hour,
+                        "predictedEnergy": _decimal_text(row.get("charging_energy")),
                         "lowerBound": _decimal_text(row.get("lower_bound")),
                         "upperBound": _decimal_text(row.get("upper_bound")),
                     }
                 )
         first = rows[0] if rows else {}
         interval_available = _bool(first.get("interval_available")) if rows else False
+        available = bool(rows)
         data = {
-            "availability": "AVAILABLE" if rows else "UNAVAILABLE",
-            "date": _date_text(params.get("date")),
-            "cutoffHour": cutoff,
-            "forecastStartAt": _datetime_text(first.get("forecast_start_at")),
+            "availability": "AVAILABLE" if available else "UNAVAILABLE",
+            "date": _date_text(params.get("date")) if available else None,
+            "cutoffHour": cutoff if available else None,
+            "forecastStartAt": _business_datetime_text(first.get("forecast_start_at")) if available else None,
             "energyUnit": "kWh",
             "orderCountUnit": "count",
             "actual": actual,
@@ -465,9 +473,9 @@ class DbApiDashboardRepository:
                 "available": interval_available,
                 "confidenceLevel": _decimal_text(first.get("confidence_level")) if interval_available else None,
             },
-            "modelVersion": first.get("model_version"),
-            "predictionRunId": first.get("prediction_run_id"),
-            "generatedAt": _datetime_text(first.get("generated_at")),
+            "modelVersion": first.get("model_version") if available else None,
+            "predictionRunId": first.get("prediction_run_id") if available else None,
+            "generatedAt": _datetime_text(first.get("generated_at")) if available else None,
         }
         return self._payload(data, rows)
 
@@ -632,7 +640,9 @@ def _metric_value(value: Any, unit: Any) -> int | str | None:
 def _ratio_text(numerator: Any, denominator: int) -> str:
     if not denominator:
         return "0"
-    return _decimal_text(Decimal(int(numerator)) / Decimal(denominator)) or "0"
+    ratio = Decimal(int(numerator)) / Decimal(denominator)
+    text = format(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP), ".6f")
+    return text.rstrip("0").rstrip(".")
 
 
 def _split_ids(value: Any) -> list[str]:
@@ -754,4 +764,25 @@ def _datetime_value(value: Any) -> datetime | None:
 
 def _datetime_text(value: Any) -> str | None:
     parsed = _datetime_value(value)
+    return parsed.isoformat() if parsed else None
+
+
+_BUSINESS_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def _business_datetime_value(value: Any) -> datetime | None:
+    """Interpret naive prediction timestamps as Asia/Shanghai business time.
+
+    MySQL DATETIME columns do not carry timezone metadata.  Prediction target
+    times are business timestamps, while audit timestamps remain UTC through
+    ``_datetime_value``.  Explicitly zoned values are preserved unchanged.
+    """
+    if value is None:
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return parsed.replace(tzinfo=_BUSINESS_TIMEZONE) if parsed.tzinfo is None else parsed
+
+
+def _business_datetime_text(value: Any) -> str | None:
+    parsed = _business_datetime_value(value)
     return parsed.isoformat() if parsed else None
