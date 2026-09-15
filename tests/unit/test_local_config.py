@@ -34,5 +34,14 @@ def test_local_config_rejects_non_ncs_keys(tmp_path):
         load_local_config(config)
 
 
+def test_local_config_accepts_windows_powershell_utf8_bom(tmp_path, monkeypatch):
+    config = tmp_path / "ncs.env"
+    config.write_text("NCS_VM_HOST=192.168.1.100\n", encoding="utf-8-sig")
+    monkeypatch.delenv("NCS_VM_HOST", raising=False)
+
+    assert load_local_config(config) == config.resolve()
+    assert os.environ["NCS_VM_HOST"] == "192.168.1.100"
+
+
 def test_missing_local_config_is_optional(tmp_path):
     assert load_local_config(tmp_path / "missing.env") is None

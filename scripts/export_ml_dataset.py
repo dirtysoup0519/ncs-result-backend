@@ -62,7 +62,7 @@ DATASETS = {
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export published MySQL result data for ML training")
-    parser.add_argument("--database-url", default=os.getenv("NCS_MYSQL_ADMIN_URL") or os.getenv("NCS_DATABASE_URL"))
+    parser.add_argument("--database-url", default=os.getenv("NCS_DATABASE_URL"))
     parser.add_argument("--dataset", choices=(*DATASETS, "all"), default="load_hourly")
     parser.add_argument("--output", type=Path, default=Path("exports/ml_dataset"))
     parser.add_argument("--start-date", help="inclusive ISO date/time lower bound")
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--zip", action="store_true", dest="make_zip", help="also create a zip handoff package")
     args = parser.parse_args(argv)
     if not args.database_url:
-        parser.error("--database-url, NCS_MYSQL_ADMIN_URL, or NCS_DATABASE_URL is required")
+        parser.error("--database-url or NCS_DATABASE_URL is required")
     if args.station_id and args.dataset not in {"station_hour_daily", "all"}:
         parser.error("--station-id is only valid with station_hour_daily or all")
 

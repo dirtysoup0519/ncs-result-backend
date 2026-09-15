@@ -16,10 +16,10 @@ from ncs_backend.prediction.model_registry import ModelPackage
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-package", type=Path, required=True)
-    parser.add_argument("--database-url", default=os.getenv("NCS_MYSQL_ADMIN_URL") or os.getenv("NCS_DATABASE_URL"))
+    parser.add_argument("--database-url", default=os.getenv("NCS_DATABASE_URL"))
     args = parser.parse_args(argv)
     if not args.database_url:
-        parser.error("--database-url or NCS_MYSQL_ADMIN_URL is required")
+        parser.error("--database-url or NCS_DATABASE_URL is required")
     package = ModelPackage.open(args.model_package)
     connection = connection_factory_from_url(args.database_url)()
     try:

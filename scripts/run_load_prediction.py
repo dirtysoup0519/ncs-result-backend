@@ -16,12 +16,12 @@ from ncs_backend.prediction.runner import PredictionRunner
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-package", type=Path, required=True)
-    parser.add_argument("--database-url", default=os.getenv("NCS_MYSQL_ADMIN_URL") or os.getenv("NCS_DATABASE_URL"))
+    parser.add_argument("--database-url", default=os.getenv("NCS_DATABASE_URL"))
     parser.add_argument("--cutoff-time")
     parser.add_argument("--horizon", type=int, default=24)
     args = parser.parse_args(argv)
     if not args.database_url:
-        parser.error("--database-url or NCS_MYSQL_ADMIN_URL is required")
+        parser.error("--database-url or NCS_DATABASE_URL is required")
     connection = connection_factory_from_url(args.database_url)()
     try:
         package = ModelPackage.open(args.model_package)

@@ -12,7 +12,9 @@ def load_local_config(path: str | Path | None = None) -> Path | None:
     target = Path(path or os.getenv("NCS_LOCAL_CONFIG", ".local/ncs.env"))
     if not target.is_file():
         return None
-    for line_number, raw_line in enumerate(target.read_text(encoding="utf-8").splitlines(), start=1):
+    # PowerShell 5 writes ``-Encoding utf8`` with a BOM. ``utf-8-sig`` accepts
+    # both BOM and BOM-less files, so configuration remains portable.
+    for line_number, raw_line in enumerate(target.read_text(encoding="utf-8-sig").splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

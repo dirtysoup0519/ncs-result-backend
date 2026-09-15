@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
 from ncs_backend.admin.adapters.ads_v21_import import AdsV21A0Importer, AdsV21WaveBImporter
 from ncs_backend.admin.adapters.ads_v21_package import AdsV21PackageReader
-from ncs_backend.admin.mysql_setup import initialize_mysql_ads, verify_mysql_accounts
+from ncs_backend.admin.mysql_setup import initialize_mysql_ads
 from ncs_backend.bootstrap import configured_query_app
 from ncs_backend.db_console.connections import connection_factory_from_url
 from ncs_backend.query.view_contract import inspect_view_contracts
@@ -40,35 +40,31 @@ class MySqlAcceptanceReport:
     required_view_count: int
     smoke_request_count: int
     rollback_probe_clean: bool
-    permissions: dict[str, object]
+    recovery_mode: bool
 
 
 def run_mysql_acceptance(
     package_path: str | Path,
     *,
-    migrator_url: str,
-    admin_url: str,
-    reader_url: str,
+    database_url: str,
 ) -> MySqlAcceptanceReport:
-    migrator = connection_factory_from_url(migrator_url)
-    admin = connection_factory_from_url(admin_url)
-    reader = connection_factory_from_url(reader_url)
-    schema_applied = initialize_mysql_ads(migrator)
+    connection_factory = connection_factory_from_url(database_url)
+    recovery_mode = _recovery_mode_enabled(connection_factory)
+    if not recovery_mode:
+        raise RuntimeError("MySQL acceptance requires skip_grant_tables=ON")
+    schema_applied = initialize_mysql_ads(connection_factory)
     package_reader = AdsV21PackageReader()
     package = package_reader.read(Path(package_path).expanduser().resolve())
 
-    first = _import_all(package, package_reader, admin)
-    repeated = _import_all(package, package_reader, admin)
-    permissions = verify_mysql_accounts(migrator, admin, reader)
-    contracts = inspect_view_contracts(reader)
+    first = _import_all(package, package_reader, connection_factory)
+    repeated = _import_all(package, package_reader, connection_factory)
+    contracts = inspect_view_contracts(connection_factory)
     required = tuple(item for item in contracts if item.required)
     incompatible = tuple(item.view_name for item in required if not item.compatible)
     if incompatible:
         raise RuntimeError(f"required view contracts failed: {incompatible}")
-    smoke_count = _smoke_query_api(reader_url)
-    rollback_clean = _rollback_probe(package, package_reader, admin)
-    if not all((permissions.reader_physical_tables_denied, permissions.admin_dml_only, permissions.migrator_can_manage_schema)):
-        raise RuntimeError("MySQL account boundary verification failed")
+    smoke_count = _smoke_query_api(database_url)
+    rollback_clean = _rollback_probe(package, package_reader, connection_factory)
     return MySqlAcceptanceReport(
         source_batch_id=package.source_batch_id,
         schema_applied=schema_applied,
@@ -77,8 +73,25 @@ def run_mysql_acceptance(
         required_view_count=len(required),
         smoke_request_count=smoke_count,
         rollback_probe_clean=rollback_clean,
-        permissions=asdict(permissions),
+        recovery_mode=recovery_mode,
     )
+
+
+def _recovery_mode_enabled(connection_factory) -> bool:
+    connection = connection_factory()
+    cursor = connection.cursor()
+    try:
+        try:
+            cursor.execute("SHOW GRANTS")
+            return False
+        except Exception as exc:
+            return bool(
+                getattr(exc, "args", (None,))[0] == 1290
+                and "skip-grant-tables" in str(exc).lower()
+            )
+    finally:
+        cursor.close()
+        connection.close()
 
 
 def _import_all(package, reader, connection_factory) -> tuple[str, ...]:

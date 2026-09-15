@@ -1,5 +1,7 @@
 # NCS 结果库与后端
 
+新机器建议优先直接执行第 3.7 节的一键初始化与启动；如果出现 Python、网络、MySQL 或依赖环境错误，再返回执行前面的环境检查步骤。
+
 ## 1. 项目简介
 
 本仓库负责新能源汽车充电桩项目的下游服务：接收上游 Spark/Hive 生成的 ADS v2.5 数据包，校验并发布到 MySQL 结果库，通过 Flask 为 Vue 3/DataV 大屏提供查询接口，并可使用外部交付的模型结构与权重生成预测结果。
@@ -26,12 +28,12 @@
 | --- | --- |
 | Hadoop | 3.x，由上游负责 |
 | ADS | Spark v2.5，18 个数据集 |
-| MySQL | 5.7.x 或 8.0，当前验证版本为 5.7.35 |
+| MySQL | 5.7.35，实训恢复模式 |
 | Python | 3.11 或 3.12 |
 | 后端 | Flask + PyMySQL |
 | 前端 | Vue 3 + DataV，Node.js 23+ |
 
-应用不得使用 MySQL `root`。迁移账号负责结构变更，管理账号负责数据导入，查询账号只允许读取固定的 `api_v1_*` 视图。密码只能保存到 Git 忽略的本地配置中，不能写入仓库文件。
+当前答辩环境固定使用 `skip-grant-tables` 恢复模式和单一 root 连接，不创建项目数据库账号，也不执行数据库权限隔离检查。`api_v1_*` 视图继续用于隔离物理表结构和稳定前端合同。该模式没有数据库身份认证能力，只允许在隔离的 VMware 实训网络中使用。
 
 ## 2. 项目架构
 
@@ -58,6 +60,46 @@
 
 两个数据入口只负责发现和提交数据，不允许各写一套业务逻辑。相同 `sourceBatchId + packageChecksum` 重复提交时只能产生一次有效发布。新批次失败时继续保留旧的已发布批次；预测失败不回滚已经成功发布的 ADS 数据。
 
+当前代码的真实调用架构如下：
+
+```text
+Windows 启动入口
+├─ start_project.cmd
+│  └─ scripts/start_project.ps1
+│     ├─ 创建或复用 .venv（Python 3.11/3.12）
+│     ├─ 读取 .local/ncs.env
+│     ├─ 启动 scripts/run_query.py
+│     └─ 启动 Vue npm run dev
+└─ scripts/setup_new_machine.ps1（首次初始化）
+   ├─ bootstrap_mysql_recovery.py       检查 VM MySQL 恢复模式并建库
+   ├─ setup_mysql_ads.py                执行迁移和视图初始化
+   └─ verify_mysql_ads.py               验证 MySQL 结构合同
+
+数据导入链路
+├─ Windows：scripts/import_ads_v23.py
+└─ 虚拟机：scripts/shell/sync_ads_once.sh
+   └─ ncs_backend.admin.adapters.ads_v23_import
+      ├─ Manifest/文件哈希/Schema/主键校验
+      ├─ stg_* 暂存与 ctl_* 批次记录
+      ├─ rpt_* 结果表导入
+      └─ 发布 api_v1_* 视图可见批次
+
+查询链路
+scripts/run_query.py
+└─ ncs_backend.bootstrap
+   └─ ncs_backend.query.app（Flask）
+      ├─ DashboardQueryService
+      ├─ DashboardQueryRepository（只读 api_v1_*）
+      └─ 前端 /api/v1/* DTO
+
+预测链路（可选）
+run_load_prediction.py
+└─ 模型适配器读取外部模型包和已发布数据
+   └─ 预测结果表 / api_v1_load_prediction
+```
+
+数据库当前固定在虚拟机 MySQL 5.7.35；Windows 后端通过虚拟机 IP 访问，虚拟机 Shell 通过 `127.0.0.1` 访问。两者统一使用恢复模式下的无密码 root 连接，项目不创建三个应用账号，也不把 MySQL 密码放入仓库。
+
 推荐目录结构如下，仓库内命令均从 `ncs-result-backend` 根目录执行：
 
 ```text
@@ -77,7 +119,7 @@ workspace/
 | Flask 查询 API | Windows | 虚拟机 IP |
 | Windows 手工导入 | Windows | 虚拟机 IP |
 | Shell 自动同步 | 虚拟机 | `127.0.0.1` |
-| Vue 大屏 | Windows | `http://127.0.0.1:5000` |
+| Vue 大屏 | Windows | `http://127.0.0.1:5173` |
 
 ## 3. 安装与启动
 
@@ -105,7 +147,7 @@ Test-Connection <VM-IP> -Count 2
 后续示例使用：
 
 ```text
-虚拟机：192.168.176.100
+虚拟机：<vm-ip>（以当前机器的 VMware 网段为准）
 Windows VMware 网卡：192.168.176.1
 MySQL：3306
 ```
@@ -166,12 +208,13 @@ collation-server=utf8mb4_unicode_ci
 default-time-zone='+08:00'
 ```
 
-配置中不得存在：
+配置中必须存在：
 
 ```ini
 skip-grant-tables
-skip-networking
 ```
+
+为了允许 Windows 查询后端访问，配置中不得存在 `skip-networking`。
 
 检查有效启动参数：
 
@@ -189,32 +232,21 @@ sudo ss -lntp | grep ':3306'
 sudo systemctl daemon-reload
 ```
 
-### 3.4 设置 MySQL root 并退出恢复模式
+### 3.4 启用并验证恢复模式
 
-全新 MySQL 5.7 通常会在日志中生成临时 root 密码。找到临时密码并登录：
+重启 MySQL 后直接无密码登录：
 
 ```bash
-sudo grep 'temporary password' /var/log/mysqld.log | tail -n 1
-mysql -uroot -p
+mysql -uroot
 ```
 
-以下命令只能在 `mysql>` 提示符中执行：
+在 `mysql>` 中执行：
 
 ```sql
-ALTER USER 'root'@'localhost' IDENTIFIED BY '<strong-root-password>';
-FLUSH PRIVILEGES;
 SHOW VARIABLES LIKE 'skip_grant_tables';
 ```
 
-`skip_grant_tables` 必须为 `OFF`。如果为 `ON`，退出 MySQL，删除系统 MySQL 配置中的 `skip-grant-tables`，然后执行：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart mysqld
-mysql -uroot -p -e "SHOW VARIABLES LIKE 'skip_grant_tables';"
-```
-
-`--skip-grant-tables` 只用于密码恢复。在该模式下 MySQL 会拒绝 `CREATE USER`、`ALTER USER` 和 `GRANT`，项目初始化脚本无法运行。
+结果必须为 `ON`。不要执行 `ALTER USER`、`CREATE USER`、`GRANT` 或 `FLUSH PRIVILEGES`；项目不依赖 MySQL 账号权限，数据库、表和视图由无密码 root 连接创建。
 
 ### 3.5 配置虚拟机防火墙
 
@@ -232,32 +264,20 @@ sudo firewall-cmd --list-rich-rules
 如果 `firewalld` 未运行，应先确认虚拟机网络隔离方式，不要盲目修改防火墙服务。Windows 验证：
 
 ```powershell
-Test-NetConnection 192.168.176.100 -Port 3306
+Test-NetConnection <vm-ip> -Port 3306
 ```
 
 只有 `TcpTestSucceeded : True` 才继续。
 
-### 3.6 临时允许 Windows 完成首次初始化
-
-当前 Windows 初始化脚本需要一次 root 连接来建库、建账号和授权。不要创建 `root@'%'`，只临时允许 Windows VMware 地址。
-
-在虚拟机执行 `mysql -uroot -p`，然后在 `mysql>` 中执行：
-
-```sql
-CREATE USER IF NOT EXISTS 'root'@'192.168.176.1'
-  IDENTIFIED BY '<strong-root-password>';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.176.1' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-SELECT User, Host FROM mysql.user WHERE User = 'root';
-```
-
-### 3.7 准备 Windows 开发环境
+### 3.6 准备 Windows 开发环境
 
 Windows 必须安装：
 
 - Python 3.11 或 3.12；
 - Git；
 - Node.js 23+，仅启动前端时需要。
+
+不需要手工安装 Flask 或 PyMySQL。`./setup_new_machine.cmd` 和 `./start_project.cmd` 会自动创建 `./.venv/` 并安装后端依赖。不要使用全局 `python ./scripts/run_query.py` 启动项目。
 
 将后端和前端放到“项目架构”所示的相邻目录。进入后端仓库根目录后检查：
 
@@ -270,13 +290,21 @@ Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
 
 如果前端目录不同，调整为推荐目录；不要修改前端源码来适配本机路径。
 
-### 3.8 一键建库、建账号和生成本地配置
+### 3.7 一键初始化并启动
 
-在后端仓库根目录双击 `./setup_new_machine.cmd`，或在 PowerShell 中运行：
+在后端仓库根目录直接运行：
+
+```powershell
+.\start_project.cmd
+```
+
+启动脚本会自动创建 Python 虚拟环境并安装 Flask/PyMySQL。如果 `./.local/ncs.env` 不存在，它会自动调用数据库初始化脚本，然后继续启动后端和前端。无需输入任何 MySQL 密码。
+
+也可以只执行数据库初始化：
 
 ```powershell
 .\scripts\setup_new_machine.ps1 `
-  -VmHost 192.168.176.100 `
+  -VmHost <vm-ip> `
   -MysqlPort 3306
 ```
 
@@ -285,18 +313,16 @@ Test-Path ..\ncs-dashboard\ncs-dashboard\package.json
 1. 检查虚拟机 MySQL 端口；
 2. 检查 Python 3.11/3.12；
 3. 创建 `./.venv/` 并安装项目依赖；
-4. 在窗口中隐藏输入 root 和三个应用账号密码；
-5. 检查 MySQL 没有运行在 `skip-grant-tables`；
+4. 使用无密码 root 连接；
+5. 确认 MySQL 正运行在 `skip-grant-tables`；
 6. 创建 `ncs_analytics`、控制表、结果表、索引和视图；
-7. 创建并验证 `ncs_ads_migrator`、`ncs_ads_admin`、`ncs_ads_reader`；
+7. 验证稳定视图合同；
 8. 生成 Git 忽略的 `./.local/ncs.env`。
-
-默认 `AccountHost=%` 用于学生隔离网络中的双入口：Windows 和虚拟机均可使用应用账号。部署到非隔离网络时必须按来源分别创建账号，不能使用 `%`。
 
 成功标志：
 
 ```text
-READY: MySQL schema, accounts and grants are ready.
+READY: recovery-mode MySQL schema and views are ready.
 Local config written to .../.local/ncs.env
 ```
 
@@ -304,19 +330,12 @@ Local config written to .../.local/ncs.env
 
 ```powershell
 .\scripts\setup_new_machine.ps1 `
-  -VmHost 192.168.176.100 `
+  -VmHost <vm-ip> `
   -MysqlPort 3306 `
   -SkipDependencyInstall
 ```
 
-完成后回到虚拟机，删除临时远程 root，只保留 `root@localhost`：
-
-```sql
-DROP USER IF EXISTS 'root'@'192.168.176.1';
-FLUSH PRIVILEGES;
-```
-
-### 3.9 导入 ADS 数据
+### 3.8 导入 ADS 数据
 
 初始化只创建数据库结构，不会自动生成业务数据。先将最新 ADS v2.5 包解压到后端仓库相邻目录，例如 `../ads-v25/`。
 
@@ -331,13 +350,13 @@ Get-Content .\.local\ncs.env | ForEach-Object {
 
 .\.venv\Scripts\python.exe .\scripts\import_ads_v23.py `
   --package ..\ads-v25 `
-  --database-url $env:NCS_MYSQL_ADMIN_URL `
+  --database-url $env:NCS_DATABASE_URL `
   --skip-initialize
 ```
 
 脚本名称保留 `v23` 是为了兼容旧调用，当前实现会根据 Manifest 识别并导入 ADS v2.5 的 18 个数据集。
 
-### 3.10 启动后端和前端
+### 3.9 启动后端和前端
 
 PowerShell（Windows，在后端仓库根目录）：
 
@@ -346,7 +365,7 @@ Test-Path .\.local\ncs.env
 .\start_project.cmd
 ```
 
-启动脚本会读取 `./.local/ncs.env`，自动寻找 `../ncs-dashboard/ncs-dashboard/`，并启动：
+启动脚本会先检查 `./.venv/`：不存在时自动使用 Python 3.11/3.12 创建，缺少 Flask、PyMySQL 或项目包时自动安装。首次运行会要求输入当前虚拟机 IP，并将数据库地址保存到 Git 忽略的 `./.local/ncs.env`。前端不在常见相邻目录时会要求输入其目录并保存，后续启动无需重复输入。
 
 - 查询 API：`http://127.0.0.1:5000`；
 - Vue 大屏：`http://localhost:5173`。
@@ -361,7 +380,7 @@ Test-Path .\.local\ncs.env
 
 端口 `5000` 或 `5173` 已被占用时，启动脚本会保留已有进程。修改代码或配置后，应先在对应终端按 `Ctrl+C` 停止旧进程，再重新启动。
 
-### 3.11 运行测试
+### 3.10 运行测试
 
 PowerShell（Windows）：
 
@@ -371,7 +390,7 @@ PowerShell（Windows）：
 
 需要连接真实 MySQL 的环境测试必须使用虚拟机 MySQL；默认测试中的少量跳过项表示未提供真实 MySQL、ADS 包或预测依赖，不代表单元测试失败。
 
-### 3.12 可选：部署虚拟机 Shell 自动同步
+### 3.11 可选：部署虚拟机 Shell 自动同步
 
 仅使用 Windows 手工导入时可以跳过本节。自动同步要求虚拟机额外具备 Python 3.11/3.12。不要替换 CentOS 自带 Python，否则可能破坏 `yum`；应使用独立 Python 或 Conda 环境。
 
@@ -393,7 +412,7 @@ chmod +x ./scripts/shell/*.sh
 
 ```bash
 export NCS_REPO=.
-export NCS_DATABASE_URL='mysql+pymysql://ncs_ads_admin:<admin-password>@127.0.0.1:3306/ncs_analytics'
+export NCS_DATABASE_URL='mysql+pymysql://root@127.0.0.1:3306/ncs_analytics'
 export NCS_ADS_EXCHANGE_ROOT=../ncs-ads-exchange
 export NCS_ADS_SYNC_INTERVAL_SECONDS=30
 export PATH=../ncs-runtime/venv/bin:/usr/local/bin:/usr/bin:/bin
@@ -451,13 +470,13 @@ tail -f ../ncs-ads-exchange/logs/sync_ads.log
 
 不要同时运行多个 watcher，也不要同时配置每分钟 cron；脚本内部已经每 30 秒轮询并使用 `flock` 防止并发。
 
-### 3.13 常见错误
+### 3.12 常见错误
 
-`The MySQL server is running with --skip-grant-tables`：MySQL 仍处于密码恢复模式。删除有效配置中的 `skip-grant-tables`，重启 `mysqld`，确认 `skip_grant_tables=OFF` 后重新运行初始化。
+`MYSQL_RECOVERY_MODE_REQUIRED`：MySQL 没有按当前实训方案运行。确认有效配置包含 `skip-grant-tables`、不包含 `skip-networking`，重启后验证 `skip_grant_tables=ON`。
 
-`Missing ./.local/ncs.env`：建库初始化尚未成功，先运行 `./setup_new_machine.cmd`，不要手工把密码写入 Git 文件。
+`Missing ./.local/ncs.env`：直接重新运行 `./start_project.cmd`，启动脚本会自动调用初始化；仍失败时查看初始化窗口中最早出现的错误。
 
-`Access denied for user`：进入 MySQL 后执行 `SELECT USER(), CURRENT_USER();`，检查实际匹配的账号主机。`user@localhost`、`user@node100` 和 `user@192.168.176.1` 是不同账号。
+`Access denied for user`：当前连接串仍带旧账号或密码，或者 MySQL 没有真正进入恢复模式。重新执行 `./setup_new_machine.cmd` 生成 root 无密码配置，并确认 `skip_grant_tables=ON`。
 
 Windows 显示 `TcpTestSucceeded : False`：检查虚拟机 IP、MySQL 服务、`bind-address`、3306 监听和防火墙来源地址。
 

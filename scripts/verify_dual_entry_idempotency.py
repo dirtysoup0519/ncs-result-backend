@@ -225,7 +225,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Dual-entry idempotency acceptance")
     parser.add_argument("--package", type=Path, default=None, help="extracted ADS package (default: synthesize v2.5 sample)")
     parser.add_argument("--sqlite", type=Path, default=None, help="SQLite database path for the acceptance run")
-    parser.add_argument("--database-url", default=None, help="MySQL URL, e.g. mysql+pymysql://ncs_ads_admin:***@vm/ncs_analytics")
+    parser.add_argument("--database-url", default=None, help="MySQL URL, e.g. mysql+pymysql://root@vm/ncs_analytics")
     parser.add_argument("--work-dir", type=Path, default=None, help="directory for the synthesized package")
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args(argv)
