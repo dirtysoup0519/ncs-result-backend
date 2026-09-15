@@ -104,13 +104,14 @@ try {
 
     $FrontendDir = Resolve-FrontendDirectory $FrontendDir
     if (-not $FrontendDir) { Fail "Frontend package.json was not found. Pass -FrontendDir or enter its directory." }
-    $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npmCommand) { $npmCommand = Get-Command npm -ErrorAction SilentlyContinue }
     if (-not $npmCommand) { Fail "Node.js/npm was not found. Install Node.js 23+ first." }
     Write-Host "[3/5] Installing frontend dependencies in $FrontendDir"
     Push-Location $FrontendDir
     try {
-        & $npmCommand.Source install
-        if ($LASTEXITCODE -ne 0) { Fail "Frontend dependency installation failed." }
+        $npmProcess = Start-Process -FilePath $npmCommand.Source -ArgumentList @("install") -WorkingDirectory $FrontendDir -NoNewWindow -Wait -PassThru
+        if ($npmProcess.ExitCode -ne 0) { Fail "Frontend dependency installation failed." }
     }
     finally {
         Pop-Location
