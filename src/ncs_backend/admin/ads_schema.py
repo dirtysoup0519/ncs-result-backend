@@ -10,7 +10,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 ADS_MIGRATION_TABLE = "ctl_ads_schema_migration"
-ADS_MIGRATION_VERSION = 13
+ADS_MIGRATION_VERSION = 14
 ADS_RESULT_TABLES = (
     "rpt_dashboard_overview",
     "rpt_platform_distribution",
@@ -417,7 +417,20 @@ ADS_VIEW_SQL = (
                WHERE q.batch_id = b.batch_id AND q.passed = 0
                  AND q.severity IN ('BLOCKER', 'ERROR')
            ) THEN 'FAILED' ELSE 'PASSED' END AS quality_status,
-           'UNKNOWN' AS staleness, b.schema_version AS data_version
+           'UNKNOWN' AS staleness,
+           -- meta.dataVersion carries the metric-semantics version, not the
+           -- package structure version: ctl_import_batch.schema_version stays
+           -- at 2.2.0 across every import while rpt_*.data_version follows
+           -- manifest.metricVersion. Read the same oracle the rest of the view
+           -- already uses so globalStatus agrees with the other components.
+           COALESCE((
+               SELECT r.data_version
+               FROM rpt_dashboard_overview r
+               JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                 AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+               WHERE r.metric_code = 'total_order_count'
+               ORDER BY r.data_date DESC LIMIT 1
+           ), b.schema_version) AS data_version
     FROM ctl_import_batch b
     JOIN ctl_publication p ON p.dataset_code = b.dataset_code
       AND p.batch_id = b.batch_id AND p.status = 'PUBLISHED'
@@ -588,7 +601,20 @@ ADS_MYSQL_VIEW_SQL = (
                WHERE q.batch_id = b.batch_id AND q.passed = 0
                  AND q.severity IN ('BLOCKER', 'ERROR')
            ) THEN 'FAILED' ELSE 'PASSED' END AS quality_status,
-           'UNKNOWN' AS staleness, b.schema_version AS data_version
+           'UNKNOWN' AS staleness,
+           -- meta.dataVersion carries the metric-semantics version, not the
+           -- package structure version: ctl_import_batch.schema_version stays
+           -- at 2.2.0 across every import while rpt_*.data_version follows
+           -- manifest.metricVersion. Read the same oracle the rest of the view
+           -- already uses so globalStatus agrees with the other components.
+           COALESCE((
+               SELECT r.data_version
+               FROM rpt_dashboard_overview r
+               JOIN ctl_publication op ON op.dataset_code = 'dashboard_overview'
+                 AND op.batch_id = r.batch_id AND op.status = 'PUBLISHED'
+               WHERE r.metric_code = 'total_order_count'
+               ORDER BY r.data_date DESC LIMIT 1
+           ), b.schema_version) AS data_version
     FROM ctl_import_batch b
     JOIN ctl_publication p ON p.dataset_code = b.dataset_code
       AND p.batch_id = b.batch_id AND p.status = 'PUBLISHED'

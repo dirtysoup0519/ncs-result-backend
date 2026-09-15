@@ -75,6 +75,65 @@ def test_published_views_do_not_expose_unpublished_rows(tmp_path):
     assert visible == 1
 
 
+def test_data_status_reports_published_metric_version_not_package_schema_version(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        initialize_ads_result_schema(connection)
+        # The two versions differ on purpose: ctl_import_batch.schema_version is
+        # the package structure version and never moves, while rpt_*.data_version
+        # follows manifest.metricVersion. meta.dataVersion must report the latter.
+        connection.execute(
+            "INSERT INTO rpt_dashboard_overview (batch_id, metric_code, display_name, metric_value, unit, precision_value, data_version, generated_at, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("batch-a", "total_order_count", "总订单", 4827, "count", 0, "2.3.0"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("batch-a", "dashboard_overview", "2.2.0", "source-a", "ads://a", "a" * 64, "2026-09-15", 1, "PUBLISHED"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            ("pub-a", "dashboard_overview", "batch-a", "2.2.0", "PUBLISHED"),
+        )
+        connection.commit()
+        version = connection.execute(
+            "SELECT data_version FROM api_v1_data_status WHERE dataset_code = 'dashboard_overview'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert version == "2.3.0"
+    repository = DbApiDashboardRepository(lambda: sqlite3.connect(database))
+    assert repository.fetch("data_status", {}).data_version == "2.3.0"
+
+
+def test_data_status_falls_back_to_schema_version_without_published_overview(tmp_path):
+    database = tmp_path / "ncs.sqlite"
+    initialize_local_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        initialize_ads_result_schema(connection)
+        # No dashboard_overview publication at all, so the metric-version
+        # subquery is empty and the column must stay non-null.
+        connection.execute(
+            "INSERT INTO ctl_import_batch (batch_id, dataset_code, schema_version, source_batch_id, source_uri, source_sha256, data_date, row_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("batch-b", "duration_distribution", "2.2.0", "source-b", "ads://b", "b" * 64, "2026-09-15", 4, "PUBLISHED"),
+        )
+        connection.execute(
+            "INSERT INTO ctl_publication (publication_id, dataset_code, batch_id, schema_version, status, published_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            ("pub-b", "duration_distribution", "batch-b", "2.2.0", "PUBLISHED"),
+        )
+        connection.commit()
+        version = connection.execute(
+            "SELECT data_version FROM api_v1_data_status WHERE dataset_code = 'duration_distribution'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert version == "2.2.0"
+
+
 def test_station_daily_ranking_uses_full_period_and_common_end_date(tmp_path):
     database = tmp_path / "ncs.sqlite"
     initialize_local_database(database)

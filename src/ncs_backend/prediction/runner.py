@@ -17,6 +17,13 @@ class PredictionRunError(RuntimeError):
     pass
 
 
+# The read contract encodes forecast hours as offsets from the business date's
+# midnight and caps them at 47 -- one day past the latest possible cutoff
+# (23 + 24). A longer horizon would publish hours the dashboard rejects, so it
+# is refused at publish time rather than at read time.
+MAX_READ_HORIZON = 24
+
+
 class PredictionRunner:
     def __init__(
         self,
@@ -41,8 +48,8 @@ class PredictionRunner:
     ) -> str:
         adapter, loaded_model, checkpoint = self._adapters.validate_and_load(package)
         requested_horizon = int(horizon or package.manifest["output"]["horizon"])
-        if requested_horizon < 1 or requested_horizon > 168:
-            raise PredictionRunError("horizon must be between 1 and 168")
+        if requested_horizon < 1 or requested_horizon > MAX_READ_HORIZON:
+            raise PredictionRunError(f"horizon must be between 1 and {MAX_READ_HORIZON}")
         dataset = self._builder.build(
             connection,
             cutoff_time=cutoff_time,
@@ -106,9 +113,13 @@ class PredictionRunner:
         prediction_date = dataset.cutoff_time.date().isoformat()
         cursor = self._dialect.cursor(connection)
         try:
+            # ``order_counts`` defaults to an empty tuple, and zipping it directly
+            # would silently publish zero ACTUAL rows; fall back to nulls of the
+            # right length instead.
+            order_counts = dataset.order_counts or (None,) * len(dataset.values)
             actual_rows = [
-                (run_id, "ACTUAL", _timestamp(timestamp), None, value, None, None, prediction_date, dataset.cutoff_time.hour, _timestamp(forecast_start), 0, None, package.model_version, dataset.source_batch_id, stamp, dataset.data_version, "FRESH", horizon)
-                for timestamp, value in zip(dataset.timestamps, dataset.values)
+                (run_id, "ACTUAL", _timestamp(timestamp), order_count, value, None, None, prediction_date, dataset.cutoff_time.hour, _timestamp(forecast_start), 0, None, package.model_version, dataset.source_batch_id, stamp, dataset.data_version, "FRESH", horizon)
+                for timestamp, value, order_count in zip(dataset.timestamps, dataset.values, order_counts)
             ]
             forecast_rows = [
                 (run_id, "FORECAST", _timestamp(forecast_start + timedelta(hours=index)), None, value, None, None, prediction_date, dataset.cutoff_time.hour, _timestamp(forecast_start), 0, None, package.model_version, dataset.source_batch_id, stamp, dataset.data_version, "FRESH", horizon)

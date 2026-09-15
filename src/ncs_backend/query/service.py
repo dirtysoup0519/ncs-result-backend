@@ -23,6 +23,10 @@ RESOURCE_RULES: dict[str, dict[str, Any]] = {
     "prediction": {"allowed": {"date", "cutoffHour", "stationId", "regionId", "horizon"}},
 }
 
+# The contract spells the horizon as "1h"/"6h"/"24h"; the published column
+# stores whole hours.
+PREDICTION_HORIZONS: dict[str, int] = {"1h": 1, "6h": 6, "24h": 24}
+
 
 class DashboardQueryService:
     def __init__(self, repository: DashboardReadRepository, clock: Any | None = None) -> None:
@@ -95,10 +99,34 @@ class DashboardQueryService:
             raise AppError("VALIDATION_INVALID_PARAMETER", "V1 ranking metric must be fees", 400, {"field": "metric"})
         if resource == "fee_energy_trend" and params.get("granularity", "MONTH") not in {"HOUR", "DAY", "MONTH"}:
             raise AppError("VALIDATION_INVALID_PARAMETER", "granularity is not supported", 400, {"field": "granularity"})
-        if resource == "prediction" and "horizon" in params and params["horizon"] not in {"1h", "6h", "24h"}:
-            raise AppError("PREDICTION_UNSUPPORTED_HORIZON", "horizon is not supported", 400, {"field": "horizon"})
-        if resource == "prediction" and "cutoffHour" not in params:
-            raise AppError("VALIDATION_INVALID_PARAMETER", "cutoffHour is required", 400, {"field": "cutoffHour"})
+        if resource == "prediction":
+            if "horizon" in params:
+                if params["horizon"] not in PREDICTION_HORIZONS:
+                    raise AppError("PREDICTION_UNSUPPORTED_HORIZON", "horizon is not supported", 400, {"field": "horizon"})
+                # Translate here so the value never reaches SQL as a string:
+                # MySQL would coerce "24h" to 24 and SQLite would match nothing.
+                params["horizon"] = PREDICTION_HORIZONS[params["horizon"]]
+            # Both parameters select one published batch, so they are meaningful
+            # only together; omitting both means "the newest batch".
+            if ("cutoffHour" in params) != ("date" in params):
+                field = "cutoffHour" if "cutoffHour" not in params else "date"
+                raise AppError(
+                    "VALIDATION_INVALID_PARAMETER",
+                    "date and cutoffHour must be provided together",
+                    400,
+                    {"field": field},
+                )
+            for name in ("stationId", "regionId"):
+                if name in params:
+                    # The frozen contract lists them, but published prediction
+                    # rows carry no station/region dimension. A clear rejection
+                    # beats an SQL error from a column the view does not have.
+                    raise AppError(
+                        "VALIDATION_UNSUPPORTED_FILTER",
+                        f"{name} is not available for the load prediction source",
+                        400,
+                        {"field": name},
+                    )
         if resource == "process_summary" and "stationId" in params:
             raise AppError(
                 "VALIDATION_UNSUPPORTED_FILTER",

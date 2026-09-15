@@ -404,15 +404,54 @@ class DbApiDashboardRepository:
             normalization = {"method": "PAIR_MAX", "version": "1.0"}
         return self._payload({"indicators": indicators, "series": series, "normalization": normalization}, rows)
 
+    def _latest_published_prediction(self) -> tuple[date, int, str] | None:
+        """The batch a caller without explicit parameters should see.
+
+        The read view already restricts itself to PUBLISHED runs, so ordering by
+        the derived (prediction_date, cutoff_hour) pair is enough; generated_at
+        only breaks ties between runs published for the same cutoff.
+        """
+        rows = self._query(
+            """
+            SELECT prediction_date, cutoff_hour, prediction_run_id,
+                   MAX(generated_at) AS newest
+            FROM api_v1_load_prediction
+            GROUP BY prediction_date, cutoff_hour, prediction_run_id
+            ORDER BY prediction_date DESC, cutoff_hour DESC, newest DESC
+            LIMIT 1
+            """,
+            (),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        parsed = _date_value(row.get("prediction_date"))
+        cutoff = _integer(row.get("cutoff_hour"))
+        run_id = row.get("prediction_run_id")
+        if parsed is None or cutoff is None or not run_id:
+            return None
+        return parsed, cutoff, str(run_id)
+
     def _fetch_prediction(self, params: Mapping[str, Any]) -> QueryPayload:
+        requested_date = _date_value(params.get("date"))
+        cutoff = params.get("cutoffHour")
+        run_id: str | None = None
+        if requested_date is None or cutoff is None:
+            # No explicit batch: the newest published run decides both the
+            # business date and the cutoff, so callers no longer have to pin a
+            # batch just to see the current curve.
+            resolved = self._latest_published_prediction()
+            if resolved is None:
+                return self._payload(_unavailable_prediction(), [])
+            requested_date, cutoff, run_id = resolved
         where = ["prediction_date = ?", "cutoff_hour = ?"]
-        values: list[Any] = [params.get("date"), params.get("cutoffHour")]
-        if params.get("stationId") is not None:
-            where.append("station_id = ?")
-            values.append(params["stationId"])
-        if params.get("regionId") is not None:
-            where.append("region_id = ?")
-            values.append(params["regionId"])
+        values: list[Any] = [_date_text(requested_date), cutoff]
+        if run_id is not None:
+            # Pin the batch the defaults came from. Without this, publishing a
+            # second run for the same cutoff mixes both runs' rows and the
+            # response ends up with duplicate forecast hours.
+            where.append("prediction_run_id = ?")
+            values.append(run_id)
         if params.get("horizon") is not None:
             where.append("horizon = ?")
             values.append(params["horizon"])
@@ -431,16 +470,10 @@ class DbApiDashboardRepository:
         )
         actual = []
         forecast = []
-        cutoff = params.get("cutoffHour")
-        requested_date = _date_value(params.get("date"))
-        business_midnight = (
-            datetime(requested_date.year, requested_date.month, requested_date.day, tzinfo=_BUSINESS_TIMEZONE)
-            if requested_date is not None
-            else None
-        )
+        business_midnight = datetime(requested_date.year, requested_date.month, requested_date.day, tzinfo=_BUSINESS_TIMEZONE)
         for row in rows:
             target_time = _business_datetime_value(row.get("target_time"))
-            if target_time is None or requested_date is None or business_midnight is None:
+            if target_time is None:
                 continue
             if row.get("series_type") == "ACTUAL":
                 # History always stays on the business date, before the cutoff.
@@ -474,7 +507,7 @@ class DbApiDashboardRepository:
         available = bool(rows)
         data = {
             "availability": "AVAILABLE" if available else "UNAVAILABLE",
-            "date": _date_text(params.get("date")) if available else None,
+            "date": _date_text(requested_date) if available else None,
             "cutoffHour": cutoff if available else None,
             "forecastStartAt": _business_datetime_text(first.get("forecast_start_at")) if available else None,
             "energyUnit": "kWh",
@@ -489,7 +522,9 @@ class DbApiDashboardRepository:
             "predictionRunId": first.get("prediction_run_id") if available else None,
             "generatedAt": _datetime_text(first.get("generated_at")) if available else None,
         }
-        return self._payload(data, rows)
+        # The view has no data_date column; the business date the caller sees is
+        # the one the batch is keyed by.
+        return self._payload(data, rows, data_date=requested_date if available else None)
 
     def _fetch_fee_energy_trend(self, params: Mapping[str, Any]) -> QueryPayload:
         where, values = _range_filter("period_start", params, "api_v1_fee_energy_trend", include_station=True, date_range=True)
@@ -572,11 +607,19 @@ class DbApiDashboardRepository:
             rows,
         )
 
-    def _payload(self, data: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> QueryPayload:
+    def _payload(
+        self,
+        data: Mapping[str, Any],
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        data_date: date | None = None,
+    ) -> QueryPayload:
         first = rows[0] if rows else {}
         return QueryPayload(
             data=data,
-            data_date=_date_value(first.get("data_date")),
+            # Sources whose rows carry no ``data_date`` column (the prediction
+            # view derives the business date from the cutoff) pass it explicitly.
+            data_date=data_date if data_date is not None else _date_value(first.get("data_date")),
             data_version=first.get("data_version"),
             generated_at=_datetime_value(first.get("generated_at")),
             staleness=first.get("staleness") or "UNKNOWN",
@@ -765,6 +808,29 @@ def _date_value(value: Any) -> date | None:
 def _date_text(value: Any) -> str | None:
     parsed = _date_value(value)
     return parsed.isoformat() if parsed else None
+
+
+def _unavailable_prediction() -> dict[str, Any]:
+    """The frozen all-null body used when there is no batch to resolve.
+
+    Mirrors the shape returned when a requested batch simply has no rows, so
+    the dashboard adapter treats "nothing published yet" like any other
+    UNAVAILABLE response.
+    """
+    return {
+        "availability": "UNAVAILABLE",
+        "date": None,
+        "cutoffHour": None,
+        "forecastStartAt": None,
+        "energyUnit": "kWh",
+        "orderCountUnit": "count",
+        "actual": [],
+        "forecast": [],
+        "interval": {"available": False, "confidenceLevel": None},
+        "modelVersion": None,
+        "predictionRunId": None,
+        "generatedAt": None,
+    }
 
 
 def _datetime_value(value: Any) -> datetime | None:

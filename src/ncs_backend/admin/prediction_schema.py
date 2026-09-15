@@ -14,7 +14,7 @@ from typing import Any
 from ncs_backend.shared.db import DatabaseDialect, SQLITE_DIALECT
 
 PREDICTION_MIGRATION_TABLE = "ctl_prediction_schema_migration"
-PREDICTION_MIGRATION_VERSION = 2
+PREDICTION_MIGRATION_VERSION = 3
 PREDICTION_TABLES = ("ctl_model_version", "ctl_prediction_run", "rpt_load_prediction")
 PREDICTION_VIEW_NAMES = ("api_v1_load_prediction",)
 
@@ -124,6 +124,34 @@ PREDICTION_V2_STATEMENTS = (
     """,
 )
 
+# A prediction is only as current as the hourly batch it was computed from.  The
+# importer supersedes the previous publication of a dataset but leaves the runs
+# that consumed it untouched, so a stale run stays PUBLISHED forever and -- since
+# the read path picks the newest business date -- it can outrank a fresh run for
+# an earlier date.  Tie the view to the source publication so a forecast leaves
+# the read contract at the same moment its input data does.  Depends on
+# ctl_publication, which the ADS result schema owns.
+PREDICTION_V3_STATEMENTS = (
+    "DROP VIEW IF EXISTS api_v1_load_prediction",
+    """
+    CREATE VIEW api_v1_load_prediction AS
+    SELECT r.series_type, r.target_time, r.order_count, r.charging_energy,
+           r.lower_bound, r.upper_bound, r.prediction_date, r.cutoff_hour,
+           r.forecast_start_at, r.interval_available, r.confidence_level,
+           r.model_version, r.prediction_run_id, r.generated_at,
+           r.data_version, r.staleness, r.horizon
+    FROM rpt_load_prediction r
+    JOIN ctl_prediction_run pr ON pr.prediction_run_id = r.prediction_run_id
+    WHERE pr.status = 'PUBLISHED'
+      AND EXISTS (
+          SELECT 1 FROM ctl_publication lp
+          WHERE lp.dataset_code = 'load_hourly'
+            AND lp.batch_id = pr.source_batch_id
+            AND lp.status = 'PUBLISHED'
+      )
+    """,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PredictionSchemaResult:
@@ -147,7 +175,7 @@ def initialize_prediction_schema(
         migrations = ((PREDICTION_MIGRATION_VERSION, tuple(schema_sql)),)
     else:
         v1 = (*PREDICTION_SCHEMA_SQL, *(PREDICTION_MYSQL_INDEX_SQL if dialect.name == "mysql" else PREDICTION_INDEX_SQL), "DROP VIEW IF EXISTS api_v1_load_prediction", PREDICTION_VIEW_SQL)
-        migrations = ((1, v1), (2, PREDICTION_V2_STATEMENTS))
+        migrations = ((1, v1), (2, PREDICTION_V2_STATEMENTS), (3, PREDICTION_V3_STATEMENTS))
     cursor = dialect.cursor(connection)
     try:
         cursor.execute(

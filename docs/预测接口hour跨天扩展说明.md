@@ -16,10 +16,12 @@
 ## 二、后端需要改的内容
 
 1. **`forecast[].hour` 允许 ≥ 24**，按「当天 0 点起的连续小时偏移」输出。
+   - 预测从 cutoff **之后一小时**开始（`runner.py`：`forecast_start = cutoff_time + 1h`），
+     截止小时本身既不属于 `actual`（只含截止时刻以前的观测），也不属于 `forecast`。
    - 示例：`cutoffHour = 17`、`horizon = 24`
-     → `forecast[].hour = 17, 18, 19, …, 40`（共 24 个点）
+     → `forecast[].hour = 18, 19, 20, …, 41`（共 24 个点）
 2. **`forecastStartAt` 保持为当天的 ISO 时间戳**，不随跨天变化。
-   - 示例：`2026-09-15T17:00:00+08:00`（业务日期仍是 09-15）
+   - 示例：`2026-09-15T18:00:00+08:00`（业务日期仍是 09-15）
 3. **其余字段（`date` / `interval` / `modelVersion` 等）不变。**
 
 ## 三、校验规则（前端适配器会照此校验）
@@ -50,7 +52,7 @@
     "availability": "AVAILABLE",
     "date": "2026-09-15",
     "cutoffHour": 17,
-    "forecastStartAt": "2026-09-15T17:00:00+08:00",
+    "forecastStartAt": "2026-09-15T18:00:00+08:00",
     "energyUnit": "kWh",
     "orderCountUnit": "count",
     "actual": [
@@ -58,10 +60,10 @@
       { "hour": 16, "orderCount": 404, "chargingEnergy": "2714.90" }
     ],
     "forecast": [
-      { "hour": 17, "predictedEnergy": "2750.10", "lowerBound": "2475.09", "upperBound": "3025.11" },
+      { "hour": 18, "predictedEnergy": "2750.10", "lowerBound": "2475.09", "upperBound": "3025.11" },
       { "hour": 23, "predictedEnergy": "2380.40", "lowerBound": "2142.36", "upperBound": "2618.44" },
       { "hour": 24, "predictedEnergy": "2100.30", "lowerBound": "1890.27", "upperBound": "2310.33" },
-      { "hour": 40, "predictedEnergy": "1560.80", "lowerBound": "1404.72", "upperBound": "1716.88" }
+      { "hour": 41, "predictedEnergy": "1560.80", "lowerBound": "1404.72", "upperBound": "1716.88" }
     ],
     "interval": { "available": true, "confidenceLevel": "0.90" },
     "modelVersion": "v1.0.0",
@@ -80,7 +82,7 @@
 }
 ```
 
-> `hour: 24` 表示次日 0 点，`hour: 40` 表示次日 16 点（17 + 24 − 1）。
+> `hour: 24` 表示次日 0 点，`hour: 41` 表示次日 17 点（首个预测小时 18 + horizon 24 − 1）。
 
 ## 六、注意事项
 
