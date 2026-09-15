@@ -6,6 +6,7 @@ set -Eeuo pipefail
 #
 # Exit codes follow docs/ADS_v2.5自动同步与模型推理设计.md section 5.2:
 #   0  success, or no eligible batch
+#   2  configuration error (NCS_ADS_EXCHANGE_ROOT is not absolute)
 #   10 lock held by another sync process
 #   30 package data/contract problem -> rejected immediately
 #   40 MySQL unavailable -> retried up to NCS_ADS_SYNC_MAX_ATTEMPTS
@@ -15,6 +16,19 @@ set -Eeuo pipefail
 : "${NCS_REPO:?set NCS_REPO to the backend checkout}"
 : "${NCS_DATABASE_URL:?set NCS_DATABASE_URL to the VM MySQL URL}"
 ROOT="${NCS_ADS_EXCHANGE_ROOT:-/data/ncs/ads_exchange}"
+# The root must be absolute: a relative value -- which is what a mangled
+# Windows path such as "C" + U+F03A + "/Users/..." looks like to bash --
+# silently creates the whole exchange tree under the current directory.
+case "$ROOT" in
+  /*) ;;
+  [A-Za-z]:[\\/]*)
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) ;;
+      *) printf 'sync_ads_once: NCS_ADS_EXCHANGE_ROOT must be an absolute POSIX path on this host (got: %s)\n' "$ROOT" >&2; exit 2 ;;
+    esac
+    ;;
+  *) printf 'sync_ads_once: NCS_ADS_EXCHANGE_ROOT must be an absolute path (got: %s)\n' "$ROOT" >&2; exit 2 ;;
+esac
 READY="$ROOT/ready"
 ARCHIVE="$ROOT/archive"
 REJECTED="$ROOT/rejected"

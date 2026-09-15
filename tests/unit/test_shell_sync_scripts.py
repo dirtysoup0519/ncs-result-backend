@@ -6,6 +6,7 @@ _SUCCESS directory mode can be exercised end to end in a sandbox.
 """
 
 import os
+import shutil
 import stat
 import subprocess
 import textwrap
@@ -16,6 +17,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SYNC_SCRIPT = REPO_ROOT / "scripts" / "shell" / "sync_ads_once.sh"
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("flock") is None,
+    reason="sync_ads_once.sh takes a flock lock; run on Linux (util-linux) to exercise these",
+)
 
 STUB_PYTHON = textwrap.dedent(
     """\

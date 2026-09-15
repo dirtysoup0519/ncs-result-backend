@@ -21,7 +21,7 @@ set -Eeuo pipefail
 #                                     (default: $NCS_ADS_SYNC_ENV, then
 #                                      <repo>/../ncs-runtime/ads-sync.env)
 #
-# Relative NCS_ADS_EXCHANGE_ROOT values are resolved against the repo dir.
+# NCS_ADS_EXCHANGE_ROOT must be absolute; a relative value is rejected.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -47,6 +47,25 @@ done
 say() { printf 'start_ads_sync: %s\n' "$*"; }
 die() { printf 'start_ads_sync: %s\n' "$*" >&2; exit 2; }
 
+# $1 = an NCS_ADS_EXCHANGE_ROOT value. It must already be absolute: prefixing
+# REPO_DIR onto a Windows path turns "C:\...\exchange" into
+# "<repo>/C:\...\exchange", and MSYS rewrites the now-illegal colon to U+F03A,
+# so the whole exchange tree silently appears inside the repo as
+# "C" + U+F03A + "/Users/...". Leave a drive path untouched on MSYS instead,
+# and refuse anything that is not absolute.
+require_absolute_root() {
+  case "$1" in
+    /*) return 0 ;;
+    [A-Za-z]:[\\/]*)
+      case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+      esac
+      die "NCS_ADS_EXCHANGE_ROOT must be an absolute POSIX path on this host (got: $1)"
+      ;;
+  esac
+  die "NCS_ADS_EXCHANGE_ROOT must be an absolute path (got: $1)"
+}
+
 find_python() {
   local c
   for c in python3.12 python3.11 python3.10 python3; do
@@ -61,6 +80,10 @@ python_at_least() {  # $1=major $2=minor  via "$NCS_PYTHON_BIN"
 
 # --- bootstrap: env file -----------------------------------------------------
 if [[ "$STOP" -eq 0 && ! -f "$ENV_FILE" ]]; then
+  # Validate before writing: a bad value baked into the generated file would
+  # win over the environment on every later run (the file is sourced), so
+  # fixing the variable alone would never recover.
+  require_absolute_root "${NCS_ADS_EXCHANGE_ROOT:-$REPO_DIR/../ncs-ads-exchange}"
   mkdir -p "$(dirname "$ENV_FILE")"
   PY="$(find_python)" || die "no python3 interpreter found on this machine"
   say "first run: generating $ENV_FILE"
@@ -93,7 +116,7 @@ export NCS_PYTHON_BIN
 
 # --- bootstrap: exchange directories ----------------------------------------
 ROOT="${NCS_ADS_EXCHANGE_ROOT:-$REPO_DIR/../ncs-ads-exchange}"
-case "$ROOT" in /*) ;; *) ROOT="$REPO_DIR/$ROOT" ;; esac
+require_absolute_root "$ROOT"
 export NCS_ADS_EXCHANGE_ROOT="$ROOT"
 READY="$ROOT/ready"; ARCHIVE="$ROOT/archive"; REJECTED="$ROOT/rejected"
 LOGS="$ROOT/logs"; LOCKS="$ROOT/locks"

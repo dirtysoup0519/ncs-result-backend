@@ -433,12 +433,14 @@ class DbApiDashboardRepository:
         forecast = []
         cutoff = params.get("cutoffHour")
         requested_date = _date_value(params.get("date"))
+        business_midnight = datetime(requested_date.year, requested_date.month, requested_date.day, tzinfo=_BUSINESS_TIMEZONE)
         for row in rows:
             target_time = _business_datetime_value(row.get("target_time"))
-            if target_time is None or target_time.date() != requested_date:
+            if target_time is None:
                 continue
             if row.get("series_type") == "ACTUAL":
-                if target_time.hour >= cutoff:
+                # History always stays on the business date, before the cutoff.
+                if target_time.date() != requested_date or target_time.hour >= cutoff:
                     continue
                 actual.append(
                     {
@@ -449,9 +451,15 @@ class DbApiDashboardRepository:
                     }
                 )
             else:
+                # Cross-day support: forecast hour is a continuous offset from the
+                # business date's 0:00, so rows on the next day are hour >= 24
+                # (24 = next-day 0:00, capped by the horizon contract at 47).
+                if target_time.date() not in (requested_date, requested_date + timedelta(days=1)):
+                    continue
+                hour_offset = int((target_time - business_midnight).total_seconds() // 3600)
                 forecast.append(
                     {
-                        "hour": target_time.hour,
+                        "hour": hour_offset,
                         "predictedEnergy": _decimal_text(row.get("charging_energy")),
                         "lowerBound": _decimal_text(row.get("lower_bound")),
                         "upperBound": _decimal_text(row.get("upper_bound")),

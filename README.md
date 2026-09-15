@@ -525,7 +525,7 @@ PowerShell（Windows）：
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-需要连接真实 MySQL 的环境测试必须使用虚拟机 MySQL；默认测试中的少量跳过项表示未提供真实 MySQL、ADS 包或预测依赖，不代表单元测试失败。
+需要连接真实 MySQL 的环境测试必须使用虚拟机 MySQL；默认测试中的少量跳过项表示未提供真实 MySQL、ADS 包或预测依赖，不代表单元测试失败。Git Bash 不带 `flock`，因此 `test_shell_sync_scripts.py` 与 `test_start_ads_sync.py` 中走 `sync_ads_once.sh` 的用例在 Windows 上会跳过（跳过原因里写明），在 Linux 上照常执行。
 
 ### 3.11 可选：部署虚拟机 Shell 自动同步
 
@@ -637,10 +637,12 @@ chmod +x ./scripts/shell/*.sh
 ```bash
 export NCS_REPO=.
 export NCS_DATABASE_URL='mysql+pymysql://root@127.0.0.1:3306/ncs_analytics'
-export NCS_ADS_EXCHANGE_ROOT=../ncs-ads-exchange
+export NCS_ADS_EXCHANGE_ROOT="$HOME/ncs-ads-exchange"
 export NCS_ADS_SYNC_INTERVAL_SECONDS=30
 export PATH=../ncs-runtime/venv/bin:/usr/local/bin:/usr/bin:/bin
 ```
+
+`NCS_ADS_EXCHANGE_ROOT` 必须是绝对路径，相对路径会被脚本拒绝（退出码 `2`）——相对值会被拼接成仓库内路径，在 Git Bash / MSYS 下还可能因为盘符被转义而把整个交换目录建进仓库。
 
 暂不需要预测时不要设置 `NCS_MODEL_PACKAGE`。
 

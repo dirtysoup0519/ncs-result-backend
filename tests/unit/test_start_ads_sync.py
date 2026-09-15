@@ -1,6 +1,7 @@
 """Scenario tests for scripts/shell/start_ads_sync.sh (zero-config bootstrap)."""
 
 import os
+import shutil
 import signal
 import subprocess
 import textwrap
@@ -11,6 +12,13 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 START_SCRIPT = REPO_ROOT / "scripts" / "shell" / "start_ads_sync.sh"
+IS_WINDOWS = os.name == "nt"
+
+# The --once path runs sync_ads_once.sh, which needs a real flock(1).
+requires_flock = pytest.mark.skipif(
+    shutil.which("flock") is None,
+    reason="sync_ads_once.sh takes a flock lock; run on Linux (util-linux) to exercise these",
+)
 
 STUB_PYTHON = (
     "#!/usr/bin/env python3\n"
@@ -20,6 +28,86 @@ STUB_PYTHON = (
     "    sys.exit(0)\n"
     "sys.exit(0)\n"
 )
+
+
+def _watcher_pid(exchange: Path) -> int | None:
+    try:
+        return int((exchange / "locks" / "watch_ads.pid").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """Liveness probe for a pid that came from `echo $!` inside a shell script.
+
+    On Windows that pid lives in the MSYS pid space, not the Windows one
+    (`ps -W` shows e.g. bash pid 1381 -> winpid 37856), so os.kill cannot be
+    used on it at all: os.kill(pid, 0) on Windows *terminates* whichever
+    process owns that Windows pid, and only CTRL_C_EVENT/CTRL_BREAK_EVENT are
+    special-cased. Probe with the shell that owns the pid instead.
+    """
+    if IS_WINDOWS:
+        result = subprocess.run(["bash", "-c", f"kill -0 {pid}"], capture_output=True, text=True)
+        return result.returncode == 0
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _force_kill(pid: int, timeout: float = 5.0) -> None:
+    """Stop a watcher: TERM first so its own trap can take the per-round
+    `sleep` child down with it, then force. Cleaning up the child from here
+    is not enough on its own -- seeing it die makes the watcher advance to the
+    next round and spawn a fresh one before we get to the parent."""
+    if IS_WINDOWS:
+        subprocess.run(["bash", "-c", f"kill -TERM {pid}"], capture_output=True, text=True)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+    deadline = time.time() + timeout
+    while time.time() < deadline and _pid_alive(pid):
+        time.sleep(0.1)
+    if not _pid_alive(pid):
+        return
+
+    if IS_WINDOWS:
+        # SIGKILL cannot be trapped, so the child has to be reaped from here.
+        # Children first: MSYS re-parents them the moment the parent dies.
+        # `taskkill /T` does not work for this -- the Windows parent recorded
+        # for an MSYS child is not the watcher's pid.
+        subprocess.run(
+            ["bash", "-c", f"ps -W | awk '$2=={pid} {{print $1}}' | xargs -r kill -9"],
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, text=True)
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+# Watchers a test started, kept so teardown can still reap their children
+# after the script's own --stop has already removed the pid file.
+STARTED_WATCHERS: list[int] = []
+
+
+def _kill_watcher(exchange: Path, timeout: float = 10.0) -> None:
+    pids = [*STARTED_WATCHERS]
+    pid = _watcher_pid(exchange)
+    if pid is not None:
+        pids.append(pid)
+    STARTED_WATCHERS.clear()
+    for pid in pids:
+        _force_kill(pid, timeout)  # no-op for a pid that already exited
 
 
 @pytest.fixture()
@@ -40,7 +128,12 @@ def env(tmp_path, monkeypatch):
     for key, value in values.items():
         if key.startswith("NCS_"):
             monkeypatch.setenv(key, value)
-    return values
+    yield values
+    # The detached watcher outlives the pytest process: if a test fails before
+    # running --stop, it would keep looping every 30s forever, recreating the
+    # exchange tree under the temp dir (or, when the root is mangled, inside
+    # the repo). Never let one escape.
+    _kill_watcher(exchange)
 
 
 def _make_env_file(env, extra: dict[str, str] | None = None) -> Path:
@@ -76,6 +169,7 @@ def _dirs_exist(exchange: Path) -> bool:
     return all((exchange / name).is_dir() for name in ("ready", "processing", "archive", "rejected", "logs", "locks"))
 
 
+@requires_flock
 def test_fresh_machine_generates_env_and_runs_once(env):
     env_file = Path(env["env_file"])
     assert not env_file.exists()
@@ -93,6 +187,7 @@ def test_fresh_machine_generates_env_and_runs_once(env):
     assert "sync_ads_once exit=0" in result.stdout
 
 
+@requires_flock
 def test_fresh_machine_honors_db_url(env):
     env_file = Path(env["env_file"])
 
@@ -102,6 +197,7 @@ def test_fresh_machine_honors_db_url(env):
     assert "NCS_DATABASE_URL='mysql+pymysql://root@10.0.0.5:3306/ncs_analytics'" in env_file.read_text(encoding="utf-8")
 
 
+@requires_flock
 def test_existing_env_with_stub_python_once(env):
     _make_env_file(env)
 
@@ -132,6 +228,7 @@ def test_detach_start_twice_and_stop(env):
         time.sleep(0.1)
     assert pid_file.exists()
     pid = int(pid_file.read_text().strip())
+    STARTED_WATCHERS.append(pid)
 
     duplicate = _run(env, "--env", str(env["env_file"]), "--detach")
     assert duplicate.returncode == 1
@@ -140,13 +237,8 @@ def test_detach_start_twice_and_stop(env):
     stop = _run(env, "--env", str(env["env_file"]), "--stop")
     assert stop.returncode == 0
     deadline = time.time() + 5
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
+    while time.time() < deadline and _pid_alive(pid):
         time.sleep(0.1)
-    else:
-        os.kill(pid, signal.SIGKILL)
-        pytest.fail("watcher did not stop")
+    if _pid_alive(pid):
+        pytest.fail("watcher did not stop")  # teardown reaps it
     assert not pid_file.exists()
