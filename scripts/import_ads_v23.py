@@ -9,10 +9,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ncs_backend.admin.adapters.ads_v23_import import AdsV23Importer
-from ncs_backend.admin.adapters.ads_v23_package import AdsV23PackageReader
+from ncs_backend.admin.adapters.ads_v23_import import AdsV23Importer, AdsV23ImportError
+from ncs_backend.admin.adapters.ads_v23_package import AdsV23PackageError, AdsV23PackageReader
 from ncs_backend.db_console.connections import connection_factory_from_url, database_dialect_from_url
 from ncs_backend.shared.db import SQLITE_DIALECT
+
+EXIT_DATA_PROBLEM = 30
+EXIT_DB_UNAVAILABLE = 40
+EXIT_INTERNAL_ERROR = 50
+
+
+def _exit_code_for(exc: BaseException) -> int:
+    """Classify an import failure per the sync exit-code contract.
+
+    30: package data/contract problem (retrying cannot help).
+    40: MySQL connectivity problems (transient, retry later).
+    50: anything else (internal error, retry until the attempt limit).
+    """
+    if isinstance(exc, (AdsV23ImportError, AdsV23PackageError)):
+        return EXIT_DATA_PROBLEM
+    try:
+        import pymysql
+    except ImportError:
+        return EXIT_INTERNAL_ERROR
+    if isinstance(exc, (pymysql.err.OperationalError, pymysql.err.InterfaceError)):
+        return EXIT_DB_UNAVAILABLE
+    return EXIT_INTERNAL_ERROR
 
 
 def main(argv=None) -> int:
@@ -26,19 +48,25 @@ def main(argv=None) -> int:
     if args.sqlite is None and not args.database_url:
         parser.error("--sqlite, --database-url, or NCS_DATABASE_URL is required")
 
-    package = AdsV23PackageReader().read(args.package)
-    if args.sqlite is not None:
-        args.sqlite.parent.mkdir(parents=True, exist_ok=True)
-        connection_factory = lambda: sqlite3.connect(args.sqlite)
-        dialect = SQLITE_DIALECT
-    else:
-        connection_factory = connection_factory_from_url(args.database_url)
-        dialect = database_dialect_from_url(args.database_url)
-    result = AdsV23Importer(
-        connection_factory,
-        dialect=dialect,
-        initialize_schema=not args.skip_initialize,
-    ).import_package(package)
+    reader = AdsV23PackageReader()
+    try:
+        package = reader.read(args.package)
+        if args.sqlite is not None:
+            args.sqlite.parent.mkdir(parents=True, exist_ok=True)
+            connection_factory = lambda: sqlite3.connect(args.sqlite)
+            dialect = SQLITE_DIALECT
+        else:
+            connection_factory = connection_factory_from_url(args.database_url)
+            dialect = database_dialect_from_url(args.database_url)
+        result = AdsV23Importer(
+            connection_factory,
+            dialect=dialect,
+            initialize_schema=not args.skip_initialize,
+        ).import_package(package)
+    except Exception as exc:  # noqa: BLE001 - classified per the sync exit-code contract
+        code = _exit_code_for(exc)
+        print(json.dumps({"exitCode": code, "error": str(exc)}), file=sys.stderr)
+        return code
     print(json.dumps({
         "sourceBatchId": package.source_batch_id,
         "schemaVersion": package.schema_version,

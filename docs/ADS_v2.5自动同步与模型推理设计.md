@@ -76,7 +76,7 @@ Shell 自动同步定义为“新批次完成后 30～60 秒内进入结果库�
 
 ### 3.2 自动同步缺失 — 首版已实现
 
-`scripts/shell/` 已提供 `sync_ads_once.sh`、`watch_ads.sh` 和 `ncs_ads_sync.env.example`：flock 单实例锁、完成标记优先（不猜测文件写入结束）、解压校验、统一导入命令、成功归档、失败隔离、预测失败不回滚 ADS 发布。剩余差距：`install_ads_sync_cron.sh` 未实现、退出码 30/40 未与 50 区分、`ready/<batchId>/` 加 `_SUCCESS` 目录模式未实现。
+`scripts/shell/` 已提供 `sync_ads_once.sh`、`watch_ads.sh` 和 `ncs_ads_sync.env.example`：flock 单实例锁、完成标记优先（不猜测文件写入结束）、解压校验、统一导入命令、成功归档、失败隔离、预测失败不回滚 ADS 发布。2026-09 已补齐：退出码 30/40/50 由导入命令按异常类型区分（`scripts/import_ads_v23.py`）、40/50 按尝试上限自动重试、预测失败进入 `.ready.predict` 只重跑预测、`ready/<batchId>/` 加 `_SUCCESS` 目录模式、日志时区固定 Asia/Shanghai、Python 版本预检。剩余差距：`install_ads_sync_cron.sh` 未实现。
 
 ### 3.3 预测写入链路缺失 — 已实现
 
@@ -168,10 +168,12 @@ scripts/shell/ncs_ads_sync.env.example
 |---:|---|---|
 | 0 | 成功，或没有新批次 | 否 |
 | 10 | 锁被其他同步进程占用 | 否 |
-| 20 | 包未完成或暂不可读 | 是 |
+| 20 | （保留，不再发射：未完成包直接跳过，不阻塞后续批次） | - |
 | 30 | Manifest、字段、校验和或对账失败 | 否，进入 rejected |
-| 40 | MySQL 暂时不可用 | 是 |
-| 50 | 导入或发布内部错误 | 是，达到上限后 rejected |
+| 40 | MySQL 暂时不可用 | 是，达到 `NCS_ADS_SYNC_MAX_ATTEMPTS`（默认 3）上限后 rejected |
+| 50 | 导入或发布内部错误 | 是；导入失败达上限后 rejected，预测失败达上限后 archive（ADS 已发布） |
+
+选包规则（2026-09 修订）：`sync_ads_once.sh` 按修改时间取最旧的**已就绪**批次——ZIP/TAR.GZ 需带同名 `.ready` 或 `.ready.predict` 标记，目录需含 `_SUCCESS`。未完成标记的包不参与选取，等待下一轮。预测失败时标记改名为 `.ready.predict`，后续轮次只重跑预测、不重复导入。
 
 `watch_ads.sh` 默认每 30 秒调用一次 `sync_ads_once.sh`。答辩环境优先使用前台 `--watch`，便于展示日志；稳定环境可用 `cron` 每分钟执行一次。不要同时启用 watch 和 cron，`flock` 虽能防并发，但会制造无意义日志。
 

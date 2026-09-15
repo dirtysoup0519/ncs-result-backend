@@ -73,6 +73,8 @@ class AdsV23PackageReader:
             if entry.get("file") != spec.filename:
                 raise AdsV23PackageError(f"unexpected file for {spec.dataset_code}: {entry.get('file')}")
             path = self._safe_path(contract_root, spec.filename)
+            if not path.is_file():
+                raise AdsV23PackageError(f"required dataset file is missing: {spec.filename}")
             actual_hash = _sha256(path)
             if str(entry.get("checksum", "")).lower() != actual_hash:
                 raise AdsV23PackageError(f"SHA-256 mismatch: {spec.filename}")
